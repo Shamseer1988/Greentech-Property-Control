@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { Can } from "@/components/can";
 import { selectClass } from "@/components/ui/dialog";
 import { Skeleton, EmptyState } from "@/components/ui/states";
+import { PageHero } from "@/components/ui/page-hero";
 import { useDebouncedValue } from "@/lib/use-debounce";
 import { usePropertyTypes } from "@/lib/use-property-types";
 import { keys } from "@/lib/query-keys";
@@ -91,18 +92,16 @@ export default function PropertiesPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex items-end justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">Properties</h1>
-          <p className="text-sm text-muted-foreground">Buildings, camps, villas and stores taken from landlords.</p>
-        </div>
-        <Can perm="property.create">
-          <Link href="/properties/new"
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-            <Plus className="h-4 w-4" /> New property
-          </Link>
-        </Can>
-      </div>
+      <PageHero icon={Building2} title="Properties"
+        description="Buildings, camps, villas and stores taken from landlords."
+        action={
+          <Can perm="property.create">
+            <Link href="/properties/new"
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              <Plus className="h-4 w-4" /> New property
+            </Link>
+          </Can>
+        } />
 
       <div className="glass rounded-xl p-4">
         <div className="flex items-center gap-2 flex-wrap">

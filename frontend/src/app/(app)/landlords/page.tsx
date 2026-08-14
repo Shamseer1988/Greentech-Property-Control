@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil } from "lucide-react";
+import { Plus, Pencil, AlertTriangle, Landmark } from "lucide-react";
 import type { ColumnDef, PaginationState } from "@tanstack/react-table";
 import { api } from "@/lib/api";
 import { Can } from "@/components/can";
 import { Modal, Field, inputClass, selectClass, textareaClass } from "@/components/ui/dialog";
 import { DataTable } from "@/components/ui/data-table";
+import { PageHero } from "@/components/ui/page-hero";
 import { toast, errorMessage } from "@/components/ui/toast";
 import { useDebouncedValue } from "@/lib/use-debounce";
 import { keys } from "@/lib/query-keys";
@@ -41,6 +42,16 @@ const EXPIRY_PRESETS = [
   { value: "90", label: "Within 3 months" },
   { value: "180", label: "Within 6 months" },
 ];
+
+const STATUS_TONE: Record<string, string> = {
+  active: "bg-emerald-500/10 text-emerald-600",
+  inactive: "bg-muted text-muted-foreground",
+};
+
+function daysUntil(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
+}
 
 export default function LandlordsPage() {
   const qc = useQueryClient();
@@ -99,8 +110,29 @@ export default function LandlordsPage() {
     { accessorKey: "qid_cr_number", header: "QID/CR", cell: (c) => <span className="font-mono text-xs">{c.getValue<string>() ?? "—"}</span> },
     { accessorKey: "mobile", header: "Mobile", cell: (c) => c.getValue<string>() ?? "—" },
     { accessorKey: "email", header: "Email", cell: (c) => c.getValue<string>() ?? "—" },
-    { accessorKey: "agreement_expiry_date", header: "Agreement expiry", cell: (c) => c.getValue<string>() ?? "—" },
-    { accessorKey: "status", header: "Status", cell: (c) => <span className="capitalize">{c.getValue<string>()}</span> },
+    {
+      accessorKey: "agreement_expiry_date", header: "Agreement expiry",
+      cell: (c) => {
+        const value = c.getValue<string>();
+        if (!value) return "—";
+        const days = daysUntil(value);
+        const warn = days !== null && days <= 90;
+        return (
+          <div className={"text-xs inline-flex items-center gap-1 " + (warn ? "text-amber-600" : "")}>
+            {warn && <AlertTriangle className="h-3 w-3" />}
+            {days !== null && days < 0 ? `expired ${Math.abs(days)}d ago` : `expires ${value}`}
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "status", header: "Status",
+      cell: (c) => (
+        <span className={"rounded-full px-2 py-0.5 text-xs capitalize " + (STATUS_TONE[c.getValue<string>()] ?? "")}>
+          {c.getValue<string>()}
+        </span>
+      ),
+    },
     {
       id: "actions", header: "", enableSorting: false,
       cell: (c) => {
@@ -123,20 +155,18 @@ export default function LandlordsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex items-end justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">Landlords</h1>
-          <p className="text-sm text-muted-foreground">Property owners with their current agreement, expiry tracking and attached PDFs.</p>
-        </div>
-        <Can perm="landlord.create">
-          <button
-            onClick={() => { setEditing(null); setShowForm(true); }}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            <Plus className="h-4 w-4" /> New landlord
-          </button>
-        </Can>
-      </div>
+      <PageHero icon={Landmark} title="Landlords"
+        description="Property owners with their current agreement, expiry tracking and attached PDFs."
+        action={
+          <Can perm="landlord.create">
+            <button
+              onClick={() => { setEditing(null); setShowForm(true); }}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" /> New landlord
+            </button>
+          </Can>
+        } />
 
       <div className="glass rounded-xl p-4">
         <div className="flex items-center gap-2 flex-wrap">

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, Building2, MapPin, AlertTriangle, Layers, Trash2,
+  ArrowLeft, ArrowRight, Building2, MapPin, AlertTriangle, Layers, Trash2,
   CheckCircle2, Home, Sparkles, Plus,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -13,6 +13,7 @@ import { Can } from "@/components/can";
 import { Field, inputClass, selectClass, textareaClass } from "@/components/ui/dialog";
 import { toast, errorMessage } from "@/components/ui/toast";
 import { EmptyState } from "@/components/ui/states";
+import { PageHero } from "@/components/ui/page-hero";
 import { usePropertyTypes } from "@/lib/use-property-types";
 import { useUnitTypes } from "@/lib/use-unit-types";
 import { keys } from "@/lib/query-keys";
@@ -113,6 +114,7 @@ export default function NewPropertyPage() {
     ? b.floors * b.units_per_floor
     : b.unit_count + (b.room_with_store ? b.unit_count : 0) + (b.with_mezzanine ? 1 : 0);
 
+  const [section, setSection] = useState<"details" | "structure">("details");
   const [form, setForm] = useState<Record<string, unknown>>({ property_type: "full_building", ownership_type: "rented" });
   const [landlords, setLandlords] = useState<LandlordOption[]>([]);
   const [busy, setBusy] = useState(false);
@@ -193,6 +195,10 @@ export default function NewPropertyPage() {
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Enter-key (or a stray submit) while still on the details section
+    // should advance to Structure, not silently create the property with
+    // whatever default structure settings happen to be sitting unseen.
+    if (section !== "structure") { setSection("structure"); return; }
     setBusy(true);
     try {
       const payload: Record<string, unknown> = { ...form };
@@ -243,7 +249,8 @@ export default function NewPropertyPage() {
   };
 
   const structureInvalid = genLayout && mode === "compound" && (buildings.length === 0 || codesClash);
-  const canSubmit = name.length > 0 && !!form.property_type && !structureInvalid;
+  const detailsValid = name.length > 0 && !!form.property_type;
+  const canSubmit = detailsValid && !structureInvalid;
 
   const selectedLandlord = landlords.find((l) => l.id === form.landlord_id);
   const selectedType = propertyTypes.find((t) => t.code === form.property_type);
@@ -256,20 +263,8 @@ export default function NewPropertyPage() {
         </Link>
       </div>
 
-      <div className="relative overflow-hidden rounded-2xl border border-border/60 bg-gradient-to-br from-primary/10 via-card/60 to-card/30 p-5 sm:p-6 backdrop-blur">
-        <div className="absolute -top-16 -right-16 h-48 w-48 rounded-full bg-primary/10 blur-3xl pointer-events-none" />
-        <div className="relative flex items-center gap-3">
-          <div className="grid place-items-center h-11 w-11 rounded-xl bg-primary/10 text-primary shrink-0">
-            <Building2 className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">New property</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Add a building, camp, villa or store — and optionally generate its floors and units right away.
-            </p>
-          </div>
-        </div>
-      </div>
+      <PageHero icon={Building2} title="New property"
+        description="Add a building, camp, villa or store — and optionally generate its floors and units right away." />
 
       <Can perm="property.create" fallback={
         <EmptyState icon={Building2} title="You don't have permission to create properties"
@@ -277,6 +272,25 @@ export default function NewPropertyPage() {
       }>
         <form onSubmit={save} className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
           <div className="space-y-6 min-w-0">
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <button type="button" onClick={() => setSection("details")}
+                className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 " +
+                  (section === "details" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground")}>
+                <span className={"h-4 w-4 rounded-full grid place-items-center text-[10px] " +
+                  (section === "details" ? "bg-primary text-primary-foreground" : "bg-muted")}>1</span>
+                Property details
+              </button>
+              <div className="h-px flex-1 bg-border" />
+              <button type="button" disabled={!detailsValid} onClick={() => detailsValid && setSection("structure")}
+                className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 disabled:opacity-40 disabled:cursor-not-allowed " +
+                  (section === "structure" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground")}>
+                <span className={"h-4 w-4 rounded-full grid place-items-center text-[10px] " +
+                  (section === "structure" ? "bg-primary text-primary-foreground" : "bg-muted")}>2</span>
+                Structure creation
+              </button>
+            </div>
+
+            {section === "details" && (
             <div className="glass rounded-xl p-5 sm:p-6 space-y-4">
               <h2 className="text-sm font-semibold">Basic details</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -314,10 +328,24 @@ export default function NewPropertyPage() {
                 <Field label="Managed by"><input className={inputClass} onChange={(e) => set("managed_by", e.target.value)} /></Field>
               </div>
               <Field label="Remarks"><textarea className={textareaClass} onChange={(e) => set("remarks", e.target.value)} /></Field>
+              <div className="flex justify-end pt-2 border-t border-border">
+                <button type="button" disabled={!detailsValid} onClick={() => setSection("structure")}
+                  className="h-9 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+                  Continue to structure <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
+            )}
 
+            {section === "structure" && (
             <div className="glass rounded-xl p-5 sm:p-6 space-y-4">
-              <h2 className="text-sm font-semibold">Structure</h2>
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold">Structure</h2>
+                <button type="button" onClick={() => setSection("details")}
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back to details
+                </button>
+              </div>
               <label className="inline-flex items-start gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={genLayout} onChange={(e) => setGenLayout(e.target.checked)} className="mt-0.5" />
                 <span>
@@ -468,6 +496,7 @@ export default function NewPropertyPage() {
                 </>
               )}
             </div>
+            )}
           </div>
 
           <div className="lg:sticky lg:top-6">

@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Paperclip, AlertTriangle } from "lucide-react";
+import { Plus, Pencil, Paperclip, AlertTriangle, Users } from "lucide-react";
 import type { ColumnDef, PaginationState } from "@tanstack/react-table";
 import { api } from "@/lib/api";
 import { Can } from "@/components/can";
 import { Modal, Field, inputClass, selectClass, textareaClass } from "@/components/ui/dialog";
 import { DataTable } from "@/components/ui/data-table";
+import { PageHero } from "@/components/ui/page-hero";
 import { toast, errorMessage } from "@/components/ui/toast";
 import { AttachmentsTab } from "@/components/attachments-tab";
 import { useDebouncedValue } from "@/lib/use-debounce";
@@ -151,22 +152,18 @@ export default function ClientsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex items-end justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">Clients</h1>
-          <p className="text-sm text-muted-foreground">
-            Tenants you let units to — companies and individuals, with their CR/QID and documents.
-          </p>
-        </div>
-        <Can perm="client.create">
-          <button
-            onClick={() => { setEditing(null); setShowForm(true); }}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            <Plus className="h-4 w-4" /> New client
-          </button>
-        </Can>
-      </div>
+      <PageHero icon={Users} title="Clients"
+        description="Tenants you let units to — companies and individuals, with their CR/QID and documents."
+        action={
+          <Can perm="client.create">
+            <button
+              onClick={() => { setEditing(null); setShowForm(true); }}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" /> New client
+            </button>
+          </Can>
+        } />
 
       <div className="glass rounded-xl p-4">
         <div className="flex items-center gap-2 flex-wrap">

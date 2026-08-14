@@ -53,12 +53,19 @@ def _valid_property_type(code: str) -> bool:
 
 
 def _counts_for(prop_id: int) -> dict:
-    """Live counts of floors and units for a property."""
+    """Live counts of floors and units for a property, plus a unit
+    count broken down by unit_type for the Overview tab's breakdown."""
+    type_rows = (
+        db.session.query(Unit.unit_type, db.func.count(Unit.id))
+        .filter(Unit.property_id == prop_id)
+        .group_by(Unit.unit_type).all()
+    )
     return {
         "floors_count": db.session.query(db.func.count(Floor.id))
             .filter(Floor.property_id == prop_id).scalar() or 0,
         "units_count": db.session.query(db.func.count(Unit.id))
             .filter(Unit.property_id == prop_id).scalar() or 0,
+        "units_by_type": {code: count for code, count in type_rows},
     }
 
 

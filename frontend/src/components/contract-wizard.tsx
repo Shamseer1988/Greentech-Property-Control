@@ -7,6 +7,7 @@ import { Modal, Field, inputClass, selectClass, textareaClass } from "@/componen
 import { toast, errorMessage } from "@/components/ui/toast";
 import type { AvailableUnit } from "@/lib/contract-types";
 import { money } from "@/lib/contract-types";
+import { useUnitTypes } from "@/lib/use-unit-types";
 
 type Option = { id: number; code: string; name: string };
 type Floor = { id: number; floor_number: string };
@@ -42,6 +43,9 @@ export function ContractWizard({ open, onClose, onCreated, presetClientId, prese
   const [securityDeposit, setSecurityDeposit] = useState("");
   const [openingBalance, setOpeningBalance] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const { types: unitTypes } = useUnitTypes();
+  const unitTypeName = (code: string) => unitTypes.find((t) => t.code === code)?.name ?? code.replaceAll("_", " ");
 
   useEffect(() => {
     if (!open) return;
@@ -56,6 +60,7 @@ export function ContractWizard({ open, onClose, onCreated, presetClientId, prese
     setSecurityDeposit("");
     setOpeningBalance("");
     setRemarks("");
+    setTypeFilter("");
     api.get("/clients", { params: { status: "active" } })
       .then((r) => setClients(r.data.data ?? [])).catch(() => setClients([]));
     api.get("/properties", { params: { status: "active" } })
@@ -76,6 +81,7 @@ export function ContractWizard({ open, onClose, onCreated, presetClientId, prese
       .then(([u, f]) => {
         setUnits(u.data.data ?? []);
         setFloors(f.data.data ?? []);
+        setTypeFilter("");
         // Drop any selection that just became unavailable.
         setSelected((prev) => {
           const stillOk = new Set(
@@ -88,14 +94,25 @@ export function ContractWizard({ open, onClose, onCreated, presetClientId, prese
       .finally(() => setLoadingUnits(false));
   }, [open, propertyId, startDate]);
 
+  const typeCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const u of units) map.set(u.unit_type, (map.get(u.unit_type) ?? 0) + 1);
+    return [...map.entries()].sort(([, a], [, b]) => b - a);
+  }, [units]);
+
+  const filteredUnits = useMemo(
+    () => (typeFilter ? units.filter((u) => u.unit_type === typeFilter) : units),
+    [units, typeFilter],
+  );
+
   const byFloor = useMemo(() => {
     const map = new Map<number, AvailableUnit[]>();
-    for (const u of units) {
+    for (const u of filteredUnits) {
       if (!map.has(u.floor_id)) map.set(u.floor_id, []);
       map.get(u.floor_id)!.push(u);
     }
     return map;
-  }, [units]);
+  }, [filteredUnits]);
 
   const selectedUnits = units.filter((u) => selected.has(u.id));
   const suggestedRent = selectedUnits.reduce((sum, u) => sum + (u.monthly_rent ?? 0), 0);
@@ -203,6 +220,23 @@ export function ContractWizard({ open, onClose, onCreated, presetClientId, prese
                 <span className="font-semibold">{selected.size}</span> selected
               </div>
             </div>
+
+            {typeCounts.length > 1 && (
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" onClick={() => setTypeFilter("")}
+                  className={"rounded-full px-2.5 py-1 text-xs border transition-colors " +
+                    (typeFilter === "" ? "border-primary bg-primary/10 text-primary" : "border-border bg-card/60 hover:bg-accent")}>
+                  All ({units.length})
+                </button>
+                {typeCounts.map(([code, count]) => (
+                  <button key={code} type="button" onClick={() => setTypeFilter(code)}
+                    className={"rounded-full px-2.5 py-1 text-xs border capitalize transition-colors " +
+                      (typeFilter === code ? "border-primary bg-primary/10 text-primary" : "border-border bg-card/60 hover:bg-accent")}>
+                    {unitTypeName(code)} ({count})
+                  </button>
+                ))}
+              </div>
+            )}
 
             {loadingUnits ? (
               <div className="text-sm text-muted-foreground py-8 text-center">Loading units…</div>

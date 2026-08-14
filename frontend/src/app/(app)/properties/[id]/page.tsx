@@ -36,6 +36,7 @@ type Property = {
   managed_by: string | null;
   floors_count: number;
   units_count: number;
+  units_by_type: Record<string, number>;
   remarks: string | null;
   active_agreement: Agreement | null;
 };
@@ -179,6 +180,12 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
 }
 
 function OverviewTab({ property }: { property: Property }) {
+  const { types: unitTypes } = useUnitTypes();
+  const unitTypeName = (code: string) => unitTypes.find((t) => t.code === code)?.name ?? code.replaceAll("_", " ");
+  const breakdown = Object.entries(property.units_by_type ?? {})
+    .filter(([, count]) => count > 0)
+    .sort(([, a], [, b]) => b - a);
+
   const Cell = ({ k, v }: { k: string; v: string | number | null | undefined }) => (
     <div>
       <div className="text-xs uppercase tracking-wide text-muted-foreground">{k}</div>
@@ -199,6 +206,18 @@ function OverviewTab({ property }: { property: Property }) {
           <Cell k="City" v={property.city} />
           <Cell k="Floors" v={property.floors_count} />
           <Cell k="Units" v={property.units_count} />
+          {breakdown.length > 0 && (
+            <div className="col-span-full">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Units by type</div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {breakdown.map(([code, count]) => (
+                  <span key={code} className="inline-flex items-center gap-1 rounded-full bg-card/60 border border-border px-2 py-0.5 text-xs capitalize">
+                    {unitTypeName(code)} <span className="font-semibold">{count}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {property.remarks && (
             <div className="col-span-full">
               <div className="text-xs uppercase tracking-wide text-muted-foreground">Remarks</div>
@@ -960,6 +979,8 @@ function UnitsTab({ propertyId }: { propertyId: number }) {
   );
 }
 
+const ROOM_LIKE_TYPES = ["room", "villa", "flat_1bhk", "flat_2bhk"];
+
 function UnitDialog({ open, floorId, floors, editing, unitTypes, onClose, onSaved }: {
   open: boolean; floorId: number | null; floors: Floor[]; editing: Unit | null;
   unitTypes: { code: string; name: string; is_facility: boolean }[];
@@ -1028,10 +1049,12 @@ function UnitDialog({ open, floorId, floors, editing, unitTypes, onClose, onSave
                   Shared facility (common to the property)
                 </label>
               )}
-              <label className="inline-flex items-center gap-1.5 text-sm">
-                <input type="checkbox" checked={Boolean(form.has_bathroom)} onChange={(e) => set("has_bathroom", e.target.checked)} />
-                Attached bathroom
-              </label>
+              {ROOM_LIKE_TYPES.includes(String(form.unit_type)) && (
+                <label className="inline-flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" checked={Boolean(form.has_bathroom)} onChange={(e) => set("has_bathroom", e.target.checked)} />
+                  Attached bathroom
+                </label>
+              )}
               <label className="inline-flex items-center gap-1.5 text-sm">
                 <input type="checkbox" checked={Boolean(form.has_ac)} onChange={(e) => set("has_ac", e.target.checked)} />
                 AC
