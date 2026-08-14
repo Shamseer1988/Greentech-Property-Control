@@ -6,7 +6,7 @@ const ORIGINAL_FETCH = global.fetch;
 describe("public settings store", () => {
   beforeEach(() => {
     usePublicSettings.setState({
-      companyName: "PUG Accommodation Portal",
+      companyName: "GreenTech Real Estate Portal",
       logoUrl: null,
       accentColor: "blue",
       glassmorphism: true,
@@ -19,7 +19,7 @@ describe("public settings store", () => {
 
   it("uses defaults before load", () => {
     const s = usePublicSettings.getState();
-    expect(s.companyName).toBe("PUG Accommodation Portal");
+    expect(s.companyName).toBe("GreenTech Real Estate Portal");
     expect(s.accentColor).toBe("blue");
     expect(s.glassmorphism).toBe(true);
   });
@@ -29,7 +29,7 @@ describe("public settings store", () => {
       ok: true,
       json: async () => ({
         data: {
-          "company.name": "Paris United Group",
+          "company.name": "GreenTech Real Estate",
           "company.logo_url": "https://example.com/logo.png",
           "ui.accent_color": "violet",
           "ui.glassmorphism": false,
@@ -42,7 +42,7 @@ describe("public settings store", () => {
 
     await refreshPublicSettings();
     const s = usePublicSettings.getState();
-    expect(s.companyName).toBe("Paris United Group");
+    expect(s.companyName).toBe("GreenTech Real Estate");
     expect(s.logoUrl).toBe("https://example.com/logo.png");
     expect(s.accentColor).toBe("violet");
     expect(s.glassmorphism).toBe(false);
@@ -57,7 +57,7 @@ describe("public settings store", () => {
     await refreshPublicSettings();
     const s = usePublicSettings.getState();
     expect(s.loaded).toBe(true);
-    expect(s.companyName).toBe("PUG Accommodation Portal");  // default kept
+    expect(s.companyName).toBe("GreenTech Real Estate Portal");  // default kept
     global.fetch = ORIGINAL_FETCH;
   });
 });

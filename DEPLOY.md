@@ -1,63 +1,15 @@
-# Production deployment
+# Deployment
 
-Two supported targets, same Python/Node code path, different host
-plumbing:
+Full instructions live in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — prerequisites, first install, the production checklist, reverse-proxy shape, systemd units, backups and upgrades.
 
-| Host | Install | Service mgr | Recipe |
-|---|---|---|---|
-| **Windows** (office desktop) | `scripts\install-windows.ps1` | NSSM | [`docs/BARE_METAL_WINDOWS.md`](docs/BARE_METAL_WINDOWS.md) — operate, [`docs/FRESH_DEPLOY_FROM_SCRATCH.md`](docs/FRESH_DEPLOY_FROM_SCRATCH.md) — first deploy |
-| **Linux / Proxmox LXC** | `scripts/install-linux.sh` | systemd | [`docs/BARE_METAL_LINUX.md`](docs/BARE_METAL_LINUX.md) — operate; first deploy: [`docs/FRESH_DEPLOY_LXC.md`](docs/FRESH_DEPLOY_LXC.md) (self-contained CT) or [`docs/FRESH_DEPLOY_LXC_EDGE.md`](docs/FRESH_DEPLOY_LXC_EDGE.md) (shared edge-nginx CT) |
+Quick version (Windows):
 
-There is no longer a Docker option in this repo.
-
-## Picking a Linux topology
-
-Both Linux recipes ship the same systemd units — pick the deployment
-shape by setting two env vars, no unit-file edits:
-
-| Topology | Backend `.env` | Frontend `.env.runtime` | Use when |
-|---|---|---|---|
-| **A — self-contained CT** (default) | `WAITRESS_LISTEN=127.0.0.1:5000` | `HOSTNAME=127.0.0.1` | One CT runs app + Postgres + Redis + its own nginx + Cloudflare Tunnel. The simplest box. |
-| **B — shared edge-nginx CT** | `WAITRESS_LISTEN=0.0.0.0:5000` | `HOSTNAME=0.0.0.0` | A separate CT runs nginx for every site you host. This CT carries only the app + Postgres + Redis + Celery. Firewall :5000/:3000 to the edge CT. |
-
-## TL;DR
-
-```
-   browser ──https──▶  Cloudflare edge  ──https──▶  office-host:443
-                          (proxied A)         (nginx — edge-proxy stack)
-                                                       │
-                            loopback                   │
-                            ┌──────────────────────────┘
-                            ▼
-                    waitress (Flask backend) on 127.0.0.1:5000
-                    next start  (Next.js) on 127.0.0.1:3000
-                            │
-                            └─▶  PostgreSQL 17, Redis 7, Celery worker, Celery beat
-                                 (all running as Windows services on this host)
+```powershell
+.\scripts\install-windows.ps1   # deps + frontend build
+.\scripts\bootstrap-db.ps1      # schema + seed
+.\scripts\start-all.ps1         # run
 ```
 
-* TLS mode at Cloudflare: **Full (Strict)**.
-* Origin certificate: Cloudflare-minted, RSA, 15-year, terminated by
-  the edge-proxy nginx (lives in `C:\Apps\edge-proxy\`, not this repo).
-* Cert minting recipe: in the edge-proxy stack's own
-  `ssl/README.txt`.
-* Anyone trying to reach the static IP directly (bypassing Cloudflare)
-  gets a 403 from the edge proxy's `cf_edge` allowlist.
+Then open http://localhost:3000 and sign in as `admin` with the `SUPERUSER_PASSWORD` from `backend\.env`.
 
-## What lives where
-
-| Concern | Where | Owner |
-|---|---|---|
-| Postgres data | `C:\Program Files\PostgreSQL\17\data\` | PG installer |
-| Redis | Memurai service or WSL2 | OS service |
-| Backend code + venv | `C:\Apps\Employee-Housing-Control-Portal\backend\` | this repo |
-| Frontend build | `C:\Apps\Employee-Housing-Control-Portal\frontend\.next\` | this repo |
-| Backup `.dump` files | `C:\Apps\Employee-Housing-Control-Portal\..\backups\` or `BACKUP_FOLDER` env | configurable |
-| Uploaded attachments | `..\uploads\` or `UPLOAD_FOLDER` env | configurable |
-| Cloudflare Origin Cert | `C:\Apps\edge-proxy\ssl\origin.crt` + `origin.key` | edge-proxy stack |
-| `nginx.conf` | `C:\Apps\edge-proxy\nginx.conf` | edge-proxy stack |
-| Operator runbook | `docs\BARE_METAL_WINDOWS.md` | this repo |
-
-## Day-2 ops cheatsheet
-
-See [`docs/OPERATIONS_CHEATSHEET.txt`](docs/OPERATIONS_CHEATSHEET.txt).
+For day-to-day development workflow see [`DEV.md`](DEV.md).

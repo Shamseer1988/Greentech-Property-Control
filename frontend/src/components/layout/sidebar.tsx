@@ -3,47 +3,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Building2,
-  Users,
-  BedDouble,
-  ArrowRightLeft,
-  FileSpreadsheet,
-  Settings,
-  Shield,
-  Bell,
-  Briefcase,
-  ClipboardList,
-  Key,
-  CheckSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-store";
 import { api } from "@/lib/api";
 import { useCompanyName, useCompanyLogo } from "@/lib/public-settings";
+import { visibleNavGroups, activeNavHref } from "@/lib/nav";
 
-type NavItem = { href: string; label: string; icon: typeof LayoutDashboard; perm?: string };
-
-const nav: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, perm: "dashboard.view" },
-  { href: "/properties", label: "Properties", icon: Building2, perm: "property.view" },
-  { href: "/landlords", label: "Landlords", icon: Key, perm: "landlord.view" },
-  { href: "/rooms", label: "Rooms & Beds", icon: BedDouble, perm: "room.view" },
-  { href: "/employees", label: "Employees", icon: Users, perm: "employee.view" },
-  { href: "/divisions", label: "Divisions", icon: Briefcase, perm: "division.view" },
-  { href: "/transactions", label: "Transactions", icon: ArrowRightLeft, perm: "assignment.view" },
-  { href: "/approvals", label: "Approvals", icon: CheckSquare, perm: "assignment.view" },
-  { href: "/reports", label: "Reports", icon: FileSpreadsheet, perm: "report.view" },
-  { href: "/alerts", label: "Alerts", icon: Bell },
-  { href: "/users", label: "Users & Roles", icon: Shield, perm: "user.view" },
-  { href: "/audit", label: "Audit Log", icon: ClipboardList, perm: "audit.view" },
-  { href: "/settings", label: "Settings", icon: Settings, perm: "settings.view" },
-];
-
-const COLLAPSED_KEY = "pug.sidebar.collapsed";
+const COLLAPSED_KEY = "greentech.sidebar.collapsed";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -70,7 +37,7 @@ export function Sidebar() {
   };
 
   useEffect(() => {
-    if (!has("assignment.view")) return;
+    if (!has("approval.approve")) return;
     const fetch = () => {
       api.get("/approvals/counts")
         .then((r) => setPendingTotal(r.data.data?.total ?? 0))
@@ -81,7 +48,8 @@ export function Sidebar() {
     return () => clearInterval(t);
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const items = nav.filter((n) => !n.perm || has(n.perm));
+  const groups = visibleNavGroups(has);
+  const activeHref = activeNavHref(pathname, groups);
 
   return (
     <aside
@@ -96,53 +64,65 @@ export function Sidebar() {
           <img src={logoUrl} alt="" className="h-8 w-8 rounded-lg object-cover shrink-0" />
         ) : (
           <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-blue-600 grid place-items-center text-primary-foreground font-bold shrink-0">
-            {(companyName?.[0] ?? "P").toUpperCase()}
+            {(companyName?.[0] ?? "G").toUpperCase()}
           </div>
         )}
         {!collapsed && (
           <div className="flex flex-col leading-tight min-w-0 flex-1">
             <span className="text-sm font-semibold truncate" title={companyName}>{companyName}</span>
-            <span className="text-xs text-muted-foreground">Accommodation</span>
+            <span className="text-xs text-muted-foreground">Real Estate</span>
           </div>
         )}
       </div>
-      <nav className={cn("flex-1 overflow-y-auto py-4 space-y-1", collapsed ? "px-2" : "px-3")}>
-        {items.map((item) => {
-          const Icon = item.icon;
-          const active = pathname?.startsWith(item.href);
-          const badge = item.href === "/approvals" ? pendingTotal : 0;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              title={collapsed ? item.label : undefined}
-              className={cn(
-                "flex items-center gap-3 rounded-lg text-sm font-medium transition-colors",
-                collapsed ? "justify-center px-2 py-2" : "px-3 py-2",
-                active
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
-              )}
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 truncate">{item.label}</span>
-                  {badge > 0 && (
-                    <span className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-amber-500 text-white text-[10px] font-medium">
-                      {badge > 99 ? "99+" : badge}
+      <nav className={cn("flex-1 overflow-y-auto py-4 space-y-4", collapsed ? "px-2" : "px-3")}>
+        {groups.map((group) => (
+          <div key={group.label ?? "__top"} className="space-y-1">
+            {group.label && !collapsed && (
+              <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                {group.label}
+              </div>
+            )}
+            {group.label && collapsed && (
+              <div className="mx-2 my-1.5 border-t border-border" />
+            )}
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const active = item.href === activeHref;
+              const badge = item.href === "/approvals" ? pendingTotal : 0;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  title={collapsed ? item.label : undefined}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg text-sm font-medium transition-colors",
+                    collapsed ? "justify-center px-2 py-2" : "px-3 py-2",
+                    active
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {!collapsed && (
+                    <>
+                      <span className="flex-1 truncate">{item.label}</span>
+                      {badge > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-amber-500 text-white text-[10px] font-medium">
+                          {badge > 99 ? "99+" : badge}
+                        </span>
+                      )}
+                    </>
+                  )}
+                  {collapsed && badge > 0 && (
+                    <span className="absolute -mt-4 ml-3 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-amber-500 text-white text-[9px] font-medium">
+                      {badge > 9 ? "9+" : badge}
                     </span>
                   )}
-                </>
-              )}
-              {collapsed && badge > 0 && (
-                <span className="absolute -mt-4 ml-3 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-amber-500 text-white text-[9px] font-medium">
-                  {badge > 9 ? "9+" : badge}
-                </span>
-              )}
-            </Link>
-          );
-        })}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
       <div className={cn("border-t border-border p-2 flex items-center gap-2", collapsed && "justify-center")}>
         <button
@@ -154,7 +134,7 @@ export function Sidebar() {
           {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </button>
         {!collapsed && (
-          <span className="text-xs text-muted-foreground">v0.15.0 · live demo</span>
+          <span className="text-xs text-muted-foreground">v0.2.0 · Phase 1</span>
         )}
       </div>
     </aside>

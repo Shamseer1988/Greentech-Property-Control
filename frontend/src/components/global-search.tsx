@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Search, Building2, BedDouble, Users, Key, DoorOpen, ArrowRight,
-  Zap, Plus, LayoutDashboard, FileBarChart2, Wrench, ArrowRightLeft,
+  Search, Building2, Key, DoorOpen, ArrowRight, Users,
+  Zap, Plus, LayoutDashboard, FileBarChart2, FileSignature, FileText,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-store";
@@ -30,13 +30,17 @@ type Action = {
 type Results = {
   actions: Hit[];      // matched action commands (filtered + mapped to Hit)
   properties: Hit[];
-  rooms: Hit[];
-  beds: Hit[];
-  employees: Hit[];
+  units: Hit[];
   landlords: Hit[];
+  clients: Hit[];
+  contracts: Hit[];
+  agreements: Hit[];
 };
 
-const EMPTY: Results = { actions: [], properties: [], rooms: [], beds: [], employees: [], landlords: [] };
+const EMPTY: Results = {
+  actions: [], properties: [], units: [], landlords: [], clients: [],
+  contracts: [], agreements: [],
+};
 
 // Commands. Surfaced as a typed-keyword match (Cmd-K palette style) on
 // top of the server-side entity search. Each action is gated by an
@@ -44,31 +48,36 @@ const EMPTY: Results = { actions: [], properties: [], rooms: [], beds: [], emplo
 const ACTIONS: Action[] = [
   { id: "go-dashboard", label: "Go to dashboard", sublabel: "Overview · charts · alerts",
     href: "/dashboard", icon: LayoutDashboard, keywords: "dashboard home overview" },
-  { id: "go-employees", label: "Employees", sublabel: "Master directory",
-    href: "/employees", icon: Users, perm: "employee.view", keywords: "employees staff people" },
-  { id: "new-employee", label: "New employee", sublabel: "Create a new employee record",
-    href: "/employees?new=1", icon: Plus, perm: "employee.create", keywords: "new employee add staff create" },
-  { id: "go-properties", label: "Properties", sublabel: "Buildings · floors · rooms",
-    href: "/properties", icon: Building2, perm: "property.view", keywords: "properties buildings" },
-  { id: "new-property", label: "New property", sublabel: "Add a building or apartment",
+  { id: "go-properties", label: "Properties", sublabel: "Buildings · floors · units",
+    href: "/properties", icon: Building2, perm: "property.view", keywords: "properties buildings camps" },
+  { id: "new-property", label: "New property", sublabel: "Add a building, camp or villa",
     href: "/properties?new=1", icon: Plus, perm: "property.create", keywords: "new property add building create" },
   { id: "go-landlords", label: "Landlords", sublabel: "Owner directory",
     href: "/landlords", icon: Key, perm: "landlord.view", keywords: "landlord owner" },
-  { id: "go-transactions", label: "Transactions", sublabel: "Assignments · transfers · vacations",
-    href: "/transactions", icon: ArrowRightLeft, perm: "movement.view", keywords: "transactions assignments transfers movement" },
+  { id: "go-contracts", label: "Contracts", sublabel: "Client agreements",
+    href: "/contracts", icon: FileBarChart2, perm: "contract.view", keywords: "contract agreement tenancy lease" },
+  { id: "go-clients", label: "Clients", sublabel: "Tenant directory",
+    href: "/clients", icon: Users, perm: "client.view", keywords: "client tenant customer" },
+  { id: "new-client", label: "New client", sublabel: "Add a tenant",
+    href: "/clients?new=1", icon: Plus, perm: "client.create", keywords: "new client add tenant create" },
+  { id: "go-collections", label: "Collections", sublabel: "Dues, receipts and ageing",
+    href: "/collections", icon: FileBarChart2, perm: "rent.view", keywords: "collection rent due receipt payment ageing outstanding" },
+  { id: "go-pnl", label: "Profit & Loss", sublabel: "Per-property margin",
+    href: "/pnl", icon: FileBarChart2, perm: "expense.view", keywords: "profit loss pnl margin property income" },
+  { id: "go-expenses", label: "Expenses", sublabel: "Costs, landlord payments, import",
+    href: "/expenses", icon: FileBarChart2, perm: "expense.view", keywords: "expense cost landlord payment import" },
   { id: "go-reports", label: "Reports", sublabel: "Exportable analytics",
     href: "/reports", icon: FileBarChart2, perm: "report.view", keywords: "reports analytics export" },
-  { id: "go-maintenance", label: "Maintenance", sublabel: "Open jobs",
-    href: "/transactions/maintenance", icon: Wrench, perm: "maintenance.view", keywords: "maintenance repair" },
 ];
 
 const GROUPS: { key: keyof Results; label: string; icon: typeof Building2 }[] = [
   { key: "actions", label: "Actions", icon: Zap },
   { key: "properties", label: "Properties", icon: Building2 },
-  { key: "employees", label: "Employees", icon: Users },
-  { key: "rooms", label: "Rooms", icon: DoorOpen },
-  { key: "beds", label: "Beds", icon: BedDouble },
+  { key: "units", label: "Units", icon: DoorOpen },
   { key: "landlords", label: "Landlords", icon: Key },
+  { key: "clients", label: "Clients", icon: Users },
+  { key: "contracts", label: "Contracts", icon: FileSignature },
+  { key: "agreements", label: "Agreements", icon: FileText },
 ];
 
 export function GlobalSearch() {
@@ -193,7 +202,7 @@ export function GlobalSearch() {
         onChange={(e) => { setQ(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
-        placeholder="Search properties, rooms, employees…"
+        placeholder="Search properties, units, landlords, clients…"
         aria-label="Search"
         className="w-full h-9 rounded-md border border-input bg-card/60 pl-9 pr-12 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
       />

@@ -4,12 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ToggleLeft, ToggleRight, Save, KeyRound, RefreshCw,
   Building2, Settings as Cog, Hash, CheckSquare, Bell, Mail,
-  Palette, FileUp, Lock, HardDrive, ClipboardList,
+  Palette, FileUp, Lock, HardDrive, ClipboardList, Send, Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Can } from "@/components/can";
 import { CompanyLogoUploader } from "@/components/company-logo-uploader";
 import { BackupPanel } from "@/components/backup-panel";
+import { NotificationRulesPanel, ConnectionTest } from "@/components/notification-rules-panel";
+import { PropertyTypesPanel } from "@/components/property-types-panel";
 import { inputClass, selectClass, textareaClass } from "@/components/ui/dialog";
 import { toast, errorMessage } from "@/components/ui/toast";
 
@@ -45,6 +47,9 @@ const CATEGORY_ICON: Record<string, typeof Cog> = {
   security: Lock,
   backup: HardDrive,
   audit: ClipboardList,
+  notifications: Bell,
+  telegram: Send,
+  ai: Sparkles,
 };
 
 export default function SettingsPage() {
@@ -195,7 +200,12 @@ export default function SettingsPage() {
                       onChange={(v) => setDraft(s.key, v)}
                     />
                   ))}
+                {active.category === "property" && <PropertyTypesPanel />}
                 {active.category === "backup" && <BackupPanel />}
+                {active.category === "email" && <ConnectionTest kind="email" />}
+                {active.category === "telegram" && <ConnectionTest kind="telegram" />}
+                {active.category === "ai" && <ConnectionTest kind="ai" />}
+                {active.category === "notifications" && <NotificationRulesPanel />}
               </div>
             </>
           )}

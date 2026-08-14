@@ -6,8 +6,7 @@ from ..extensions import db
 _PREFIX_DEFAULTS = {
     "property": "PROP",
     "landlord": "LL",
-    "division": "DIV",
-    "employee": "EMP",
+    "client": "CL",
 }
 
 

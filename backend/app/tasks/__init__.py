@@ -8,7 +8,7 @@ from datetime import datetime
 from ..extensions import db
 from ..models import JobRun
 
-log = logging.getLogger("pug.tasks")
+log = logging.getLogger("greentech.tasks")
 
 
 @contextmanager
@@ -50,4 +50,6 @@ def jobrun(task_name: str, payload: dict | None = None):
 from . import backup  # noqa: E402,F401
 from . import reminders  # noqa: E402,F401
 from . import expiry  # noqa: E402,F401
-from . import bulk_movements  # noqa: E402,F401
+from . import rent  # noqa: E402,F401
+from . import notifications  # noqa: E402,F401
+from . import sentry_alerts  # noqa: E402,F401

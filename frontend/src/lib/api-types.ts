@@ -251,22 +251,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/employees": {
+    "/api/v1/clients": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Employees */
+        /** List Clients */
         get: {
             parameters: {
-                query?: {
-                    q?: string;
-                    status?: "active" | "on_vacation" | "resigned" | "terminated" | "transferred" | "visa_cancelled";
-                    division_id?: number;
-                    accommodation?: "yes" | "no";
-                };
+                query?: never;
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -282,19 +277,10 @@ export interface paths {
                         "application/json": unknown;
                     };
                 };
-                /** @description Validation error */
-                422: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["ValidationError"];
-                    };
-                };
             };
         };
         put?: never;
-        /** Create Employee */
+        /** Create Client */
         post: {
             parameters: {
                 query?: never;
@@ -304,7 +290,7 @@ export interface paths {
             };
             requestBody?: {
                 content: {
-                    "application/json": components["schemas"]["EmployeeIn"];
+                    "application/json": components["schemas"]["ClientIn"];
                 };
             };
             responses: {
@@ -334,92 +320,20 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/employees/import": {
+    "/api/v1/clients/{client_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /** Import Employees */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Successful response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": unknown;
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/employees/import-batches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Import Batches */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Successful response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": unknown;
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/employees/import-batches/{batch_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Import Batch */
+        /** Get Client */
         get: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
-                    batch_id: number;
+                    client_id: number;
                 };
                 cookie?: never;
             };
@@ -445,102 +359,19 @@ export interface paths {
                 };
             };
         };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/employees/template": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Download Template */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Successful response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": unknown;
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/employees/{emp_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Employee */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    emp_id: number;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Successful response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": unknown;
-                    };
-                };
-                /** @description Not found */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["HTTPError"];
-                    };
-                };
-            };
-        };
-        /** Update Employee */
+        /** Update Client */
         put: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
-                    emp_id: number;
+                    client_id: number;
                 };
                 cookie?: never;
             };
             requestBody?: {
                 content: {
-                    "application/json": components["schemas"]["EmployeeUpdateIn"];
+                    "application/json": components["schemas"]["ClientUpdateIn"];
                 };
             };
             responses: {
@@ -574,38 +405,7 @@ export interface paths {
             };
         };
         post?: never;
-        /** Deactivate Employee */
-        delete: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    emp_id: number;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Successful response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": unknown;
-                    };
-                };
-                /** @description Not found */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["HTTPError"];
-                    };
-                };
-            };
-        };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -771,6 +571,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metrics */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": unknown;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -779,50 +615,40 @@ export interface components {
             new_password: string;
             old_password: string;
         };
-        EmployeeIn: {
-            accommodation_required?: boolean;
+        ClientIn: {
+            address?: string | null;
+            alt_mobile?: string | null;
             /** @enum {string} */
-            accommodation_type?: "executive_room" | "family" | "shared_room" | "single_room" | "supervisor_room" | "temporary";
+            client_type?: "company" | "individual";
             code?: string;
-            department?: string;
-            designation?: string;
-            division_id?: number | null;
-            emergency_contact?: string;
-            full_name: string;
-            /** @enum {string} */
-            gender?: "female" | "male" | "other";
+            contact_person?: string | null;
+            email?: string | null;
+            mobile?: string | null;
+            name: string;
+            name_ar?: string | null;
             /** Format: date */
-            joining_date?: string | null;
-            mobile_number?: string;
-            nationality?: string;
-            passport_number?: string;
-            qid_number?: string;
-            remarks?: string;
-            /** @enum {string} */
-            status?: "active" | "on_vacation" | "resigned" | "terminated" | "transferred" | "visa_cancelled";
-            visa_company?: string;
-        };
-        EmployeeUpdateIn: {
-            accommodation_required?: boolean;
-            /** @enum {string|null} */
-            accommodation_type?: "executive_room" | "family" | "shared_room" | "single_room" | "supervisor_room" | "temporary" | "" | null;
-            department?: string | null;
-            designation?: string | null;
-            division_id?: number | null;
-            emergency_contact?: string | null;
-            full_name?: string;
-            /** @enum {string|null} */
-            gender?: "female" | "male" | "other" | "" | null;
-            /** Format: date */
-            joining_date?: string | null;
-            mobile_number?: string | null;
-            nationality?: string | null;
-            passport_number?: string | null;
-            qid_number?: string | null;
+            qid_cr_expiry_date?: string | null;
+            qid_cr_number?: string | null;
             remarks?: string | null;
             /** @enum {string} */
-            status?: "active" | "on_vacation" | "resigned" | "terminated" | "transferred" | "visa_cancelled";
-            visa_company?: string | null;
+            status?: "active" | "blacklisted" | "inactive";
+        };
+        ClientUpdateIn: {
+            address?: string | null;
+            alt_mobile?: string | null;
+            /** @enum {string} */
+            client_type?: "company" | "individual";
+            contact_person?: string | null;
+            email?: string | null;
+            mobile?: string | null;
+            name?: string;
+            name_ar?: string | null;
+            /** Format: date */
+            qid_cr_expiry_date?: string | null;
+            qid_cr_number?: string | null;
+            remarks?: string | null;
+            /** @enum {string} */
+            status?: "active" | "blacklisted" | "inactive";
         };
         HTTPError: {
             detail?: Record<string, never>;
@@ -842,6 +668,9 @@ export interface components {
             mobile?: string;
             monthly_rent?: number | null;
             name: string;
+            name_ar?: string | null;
+            /** Format: date */
+            qid_cr_expiry_date?: string | null;
             qid_cr_number?: string;
             remarks?: string;
             /** @default 90 */
@@ -861,6 +690,9 @@ export interface components {
             mobile?: string | null;
             monthly_rent?: number | null;
             name?: string;
+            name_ar?: string | null;
+            /** Format: date */
+            qid_cr_expiry_date?: string | null;
             qid_cr_number?: string | null;
             remarks?: string | null;
             reminder_days_before_expiry?: number;

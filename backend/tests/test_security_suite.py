@@ -88,13 +88,13 @@ def test_revoked_token_rejected_after_logout(app):
 # ---------------------------------------------------------------------------
 def test_mutating_call_without_csrf_is_401(app):
     c, _csrf = _login(app)
-    r = c.post("/api/v1/divisions", json={"name": "no-csrf"})
+    r = c.post("/api/v1/landlords", json={"name": "no-csrf"})
     assert r.status_code == 401
 
 
 def test_mutating_call_with_csrf_succeeds(app):
     c, csrf = _login(app)
-    r = c.post("/api/v1/divisions", json={"name": "with-csrf"},
+    r = c.post("/api/v1/landlords", json={"name": "with-csrf"},
                headers={"X-CSRF-TOKEN": csrf})
     assert r.status_code in (200, 201)
 
@@ -106,7 +106,7 @@ def test_mutating_call_with_csrf_succeeds(app):
 def test_permission_bypass_denied_for_low_perm_user(client, app, auth_headers):
     # Admin (cookie) creates a HR Executive (no user.manage).
     roles = client.get("/api/v1/roles").get_json()["data"]
-    hr = next(r for r in roles if r["code"] == "hr_executive")
+    hr = next(r for r in roles if r["code"] == "accounts")
     client.post(
         "/api/v1/users",
         headers=auth_headers,

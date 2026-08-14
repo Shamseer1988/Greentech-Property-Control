@@ -35,8 +35,13 @@ backend/.env
 # Uploads & backups (keep folder, ignore contents)
 uploads/*
 !uploads/.gitkeep
+uploads.pre-restore-*/
+uploads.pre-wipe-*/
 backups/*
 !backups/.gitkeep
+
+# Claude Code local tooling config
+.claude/
 
 # IDE
 .idea/

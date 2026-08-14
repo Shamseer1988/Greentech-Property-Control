@@ -113,36 +113,32 @@ def test_notifications_require_auth(client):
 # 8d — audit diff
 # ---------------------------------------------------------------------------
 def test_audit_diff_on_update_row(client, auth_headers):
-    """Updating an employee writes an audit row with old/new value;
+    """Updating a landlord writes an audit row with old/new value;
     the audit feed renders the precomputed diff."""
-    div = client.post("/api/v1/divisions", headers=auth_headers,
-                      json={"name": "Diff Test"}).get_json()["data"]
-    emp = client.post("/api/v1/employees", headers=auth_headers,
-                      json={"full_name": "Diff Subject",
-                            "designation": "Cook",
-                            "division_id": div["id"]}).get_json()["data"]
-    # Change designation + add mobile_number
-    client.put(f"/api/v1/employees/{emp['id']}", headers=auth_headers,
-               json={"designation": "Head cook", "mobile_number": "5550000"})
+    ll = client.post("/api/v1/landlords", headers=auth_headers,
+                     json={"name": "Diff Subject", "contact_person": "Cook"}).get_json()["data"]
+    # Change contact_person + add mobile
+    client.put(f"/api/v1/landlords/{ll['id']}", headers=auth_headers,
+               json={"contact_person": "Head cook", "mobile": "5550000"})
 
-    rows = client.get("/api/v1/audit?action=update&module=employee",
+    rows = client.get("/api/v1/audit?action=update&module=landlord",
                       headers=auth_headers).get_json()["data"]
-    update = next(r for r in rows if r["entity_id"] == str(emp["id"]))
+    update = next(r for r in rows if r["entity_id"] == str(ll["id"]))
     diff = update["diff"]
     assert diff is not None
     fields = {d["field"]: d for d in diff}
-    assert fields["designation"]["before"] == "Cook"
-    assert fields["designation"]["after"] == "Head cook"
-    assert "mobile_number" in fields
-    assert fields["mobile_number"]["before"] in (None, "")
-    assert fields["mobile_number"]["after"] == "5550000"
+    assert fields["contact_person"]["before"] == "Cook"
+    assert fields["contact_person"]["after"] == "Head cook"
+    assert "mobile" in fields
+    assert fields["mobile"]["before"] in (None, "")
+    assert fields["mobile"]["after"] == "5550000"
     # Bookkeeping fields filtered out of the diff.
     assert "updated_at" not in fields
     assert "updated_by" not in fields
 
 
 def test_audit_no_diff_on_create_row(client, auth_headers):
-    client.post("/api/v1/divisions", headers=auth_headers, json={"name": "Created"})
+    client.post("/api/v1/landlords", headers=auth_headers, json={"name": "Created"})
     rows = client.get("/api/v1/audit?action=create", headers=auth_headers).get_json()["data"]
     # Create rows shouldn't have a diff field.
     for r in rows[:5]:

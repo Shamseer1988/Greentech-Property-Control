@@ -47,13 +47,13 @@ def test_get_works_with_cookie_only(app):
 def test_mutating_call_without_csrf_is_rejected(app):
     c, _csrf = _login(app)
     # No X-CSRF-TOKEN echoed → Flask-JWT-Extended rejects.
-    r = c.post("/api/v1/divisions", json={"name": "X"})
+    r = c.post("/api/v1/landlords", json={"name": "X"})
     assert r.status_code == 401
 
 
 def test_mutating_call_with_csrf_succeeds(app):
     c, csrf = _login(app)
-    r = c.post("/api/v1/divisions", json={"name": "CSRF OK"},
+    r = c.post("/api/v1/landlords", json={"name": "CSRF OK"},
                headers={"X-CSRF-TOKEN": csrf})
     assert r.status_code in (200, 201), r.get_data(as_text=True)
 
@@ -85,7 +85,7 @@ def test_change_password_invalidates_other_sessions(app, client):
     admin.post("/api/v1/auth/login", json={"username": "admin", "password": "ChangeMe123!"})
     admin_csrf = _cookies(admin)["csrf_access_token"]
     roles = admin.get("/api/v1/roles").get_json()["data"]
-    hr = next(r for r in roles if r["code"] == "hr_executive")
+    hr = next(r for r in roles if r["code"] == "accounts")
     r = admin.post(
         "/api/v1/users",
         headers={"X-CSRF-TOKEN": admin_csrf},

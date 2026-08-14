@@ -12,17 +12,16 @@ async function signIn(page: import("@playwright/test").Page) {
 }
 
 test.describe("navigation + key list pages", () => {
-  test("dashboard → employees → properties", async ({ page }) => {
+  test("dashboard → properties → landlords", async ({ page }) => {
     await signIn(page);
 
-    // Employees list renders the page heading and either a table or
-    // the "no employees match" empty state.
-    await page.goto("/employees");
-    await expect(page.getByRole("heading", { name: /employees/i, level: 1 })).toBeVisible();
-
-    // Properties list renders the same.
+    // Each list renders its page heading and either a table or an
+    // empty state — both are a pass; we're checking the route mounts.
     await page.goto("/properties");
     await expect(page.getByRole("heading", { name: /properties/i, level: 1 })).toBeVisible();
+
+    await page.goto("/landlords");
+    await expect(page.getByRole("heading", { name: /landlords/i, level: 1 })).toBeVisible();
   });
 
   test("global search ⌘K typeahead reaches dashboard action", async ({ page }) => {

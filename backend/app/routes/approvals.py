@@ -3,7 +3,6 @@ from flask import Blueprint, request
 from ..extensions import db
 from ..models import ApprovalRequest
 from ..services import audit, approvals as approval_service
-from ..services.assignments import AssignmentError
 from ..services.renewals import RenewalError
 from ..utils.auth import require_permission, current_user
 from ..utils.responses import success_response, error_response
@@ -12,7 +11,7 @@ approvals_bp = Blueprint("approvals", __name__)
 
 
 @approvals_bp.get("")
-@require_permission("assignment.view")
+@require_permission("approval.approve")
 def list_approvals():
     status = request.args.get("status", "pending")
     module = request.args.get("module")
@@ -24,13 +23,13 @@ def list_approvals():
 
 
 @approvals_bp.get("/counts")
-@require_permission("assignment.view")
+@require_permission("approval.approve")
 def pending_counts():
     return success_response(data=approval_service.pending_counts())
 
 
 @approvals_bp.get("/<int:req_id>")
-@require_permission("assignment.view")
+@require_permission("approval.approve")
 def get_approval(req_id: int):
     return success_response(data=ApprovalRequest.query.get_or_404(req_id).to_dict())
 
@@ -44,7 +43,7 @@ def approve(req_id: int):
         req = approval_service.approve(
             request_id=req_id, actor_id=actor.id, remarks=payload.get("remarks"),
         )
-    except (approval_service.ApprovalError, AssignmentError, RenewalError) as exc:
+    except (approval_service.ApprovalError, RenewalError) as exc:
         db.session.rollback()
         return error_response(str(exc), 400)
     audit.record(user=actor, action="approve", module="approval",

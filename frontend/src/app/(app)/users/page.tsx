@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Plus, Pencil, ShieldCheck, UserX, Shield } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth, type Role } from "@/lib/auth-store";
 import { Can } from "@/components/can";
 import { toast, errorMessage } from "@/components/ui/toast";
+import { keys } from "@/lib/query-keys";
 
 type UserRow = {
   id: number;
@@ -20,35 +22,37 @@ type UserRow = {
 
 export default function UsersPage() {
   const has = useAuth((s) => s.has);
-  const [rows, setRows] = useState<UserRow[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
+  const qc = useQueryClient();
   const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [showInactive, setShowInactive] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
 
-  const load = async () => {
-    setLoading(true);
-    try {
+  const canView = has("user.view");
+  const listQuery = useQuery({
+    queryKey: [...keys.users.list(), { q, showInactive }],
+    queryFn: async () => {
+      const params: Record<string, string> = {};
+      if (q) params.q = q;
+      if (!showInactive) params.status = "active";
       const [u, r] = await Promise.all([
-        api.get("/users", { params: q ? { q } : {} }),
+        api.get("/users", { params }),
         api.get("/roles"),
       ]);
-      setRows(u.data.data);
-      setRoles(r.data.data);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (has("user.view")) load();
-  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+      return { rows: u.data.data as UserRow[], roles: r.data.data as Role[] };
+    },
+    enabled: canView,
+  });
+  const rows = listQuery.data?.rows ?? [];
+  const roles = listQuery.data?.roles ?? [];
+  const loading = listQuery.isLoading;
+  const load = () => listQuery.refetch();
+  const invalidate = () => qc.invalidateQueries({ queryKey: keys.users.all() });
 
   const deactivate = async (u: UserRow) => {
     if (!confirm(`Deactivate ${u.username}?`)) return;
     await api.delete(`/users/${u.id}`);
-    await load();
+    invalidate();
   };
 
   return (
@@ -88,6 +92,10 @@ export default function UsersPage() {
             placeholder="Search by name, username, or email…"
             className="h-9 w-full max-w-sm rounded-md border border-input bg-card/60 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground shrink-0 whitespace-nowrap">
+            <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+            Show deactivated
+          </label>
           <button onClick={load} className="h-9 rounded-md border border-border bg-card/60 px-3 text-sm hover:bg-accent">
             Search
           </button>

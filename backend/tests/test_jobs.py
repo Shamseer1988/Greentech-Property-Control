@@ -28,7 +28,7 @@ def _make_property_with_expiring_agreement(app, *, days_ago: int):
             property_id=prop.id, landlord_id=ll.id,
             start_date=date.today() - timedelta(days=days_ago + 365),
             expiry_date=date.today() - timedelta(days=days_ago),
-            is_active=True, renewal_status="pending",
+            renewal_status="pending",
         )
         db.session.add(a)
         db.session.commit()
@@ -101,7 +101,6 @@ def test_celery_tasks_registered(app):
     registered = set(celery.tasks.keys())
     assert "app.tasks.expiry.daily_expiry_sweep" in registered
     assert "app.tasks.reminders.recompute_reminder_summary" in registered
-    assert "app.tasks.bulk_movements.process_bulk_workbook" in registered
 
 
 def test_beat_schedule_configured(app):

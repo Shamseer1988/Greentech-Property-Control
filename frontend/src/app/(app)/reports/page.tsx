@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import {
-  BedDouble, Building2, ClipboardList, FileText, Plane, Users,
-  Wrench, ArrowRightLeft, Layers, Calendar,
+  Building2, ClipboardList, DoorOpen, FileText,
+  Wrench, Calendar, TrendingDown,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { keys } from "@/lib/query-keys";
 
 type ReportInfo = {
   slug: string;
@@ -16,8 +18,8 @@ type ReportInfo = {
 };
 
 const CATEGORY_ICON: Record<string, typeof FileText> = {
-  Occupancy: BedDouble,
-  Employees: Users,
+  Occupancy: DoorOpen,
+  Contracts: FileText,
   Property: Building2,
   Operations: Wrench,
   Audit: ClipboardList,
@@ -25,30 +27,18 @@ const CATEGORY_ICON: Record<string, typeof FileText> = {
 
 const REPORT_ICON: Record<string, typeof FileText> = {
   "property-occupancy": Building2,
-  "room-bed-allocation": BedDouble,
-  "empty-beds": BedDouble,
-  "property-employees": Users,
-  "division-accommodation": Layers,
-  "employee-history": ArrowRightLeft,
+  "empty-units": DoorOpen,
+  "empty-units-trend": TrendingDown,
   "agreement-expiry": Calendar,
-  "vacation-employees": Plane,
-  "maintenance": Wrench,
-  "monthly-movement": ArrowRightLeft,
-  "audit-trail": ClipboardList,
 };
 
 export default function ReportsIndexPage() {
-  const [reports, setReports] = useState<ReportInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.get("/reports");
-        setReports(r.data.data);
-      } finally { setLoading(false); }
-    })();
-  }, []);
+  const reportsQuery = useQuery({
+    queryKey: keys.reports.catalog(),
+    queryFn: async () => (await api.get("/reports")).data.data as ReportInfo[],
+  });
+  const reports = reportsQuery.data ?? [];
+  const loading = reportsQuery.isLoading;
 
   const grouped = useMemo(() => {
     const out: Record<string, ReportInfo[]> = {};
@@ -61,7 +51,7 @@ export default function ReportsIndexPage() {
       <div>
         <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">Reports</h1>
         <p className="text-sm text-muted-foreground">
-          Filterable views of occupancy, employees, agreements and operations. Every report exports to Excel.
+          Filterable views of occupancy and agreements. Rent, ageing and P&amp;L reports join in later phases. Every report exports to Excel.
         </p>
       </div>
 

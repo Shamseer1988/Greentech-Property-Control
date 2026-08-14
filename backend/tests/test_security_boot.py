@@ -7,7 +7,7 @@ def _good_cfg(**overrides):
     cfg = {
         "SECRET_KEY": "x" * 64,
         "JWT_SECRET_KEY": "y" * 64,
-        "CORS_ORIGINS": ["https://housing.example.com"],
+        "CORS_ORIGINS": ["https://portal.example.com"],
     }
     cfg.update(overrides)
     return cfg

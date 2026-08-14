@@ -1,33 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { AlertTriangle, AlertOctagon, Info, Wrench, BedDouble, Building2, Users, FileText } from "lucide-react";
+import { AlertTriangle, AlertOctagon, Info, Wrench, Building2, FileText, IdCard } from "lucide-react";
 import { api } from "@/lib/api";
+import { keys } from "@/lib/query-keys";
 
 type ExpiringAgreement = {
   agreement_id: number; property_id: number; property_name: string | null;
   landlord_name: string | null; expiry_date: string; days_left: number; bucket: string;
 };
-type OverCapacity = { room_id: number; property_id: number; room_number: string; bed_count: number; capacity: number };
-type UnassignedEmployee = { id: number; code: string; full_name: string; division: string | null };
 type MaintenanceItem = {
   id: number; transaction_number: string; entity_type: string; entity_id: number;
   start_date: string | null; expected_end_date: string | null; reason: string | null;
+};
+type ExpiringDocument = {
+  attachment_id: number; entity_type: string; entity_id: string;
+  entity_name: string | null; category: string | null; doc_number: string | null;
+  original_name: string; expiry_date: string; days_left: number;
 };
 
 type Alerts = {
   critical: {
     expired_agreements: ExpiringAgreement[];
     expiring_within_7_days: ExpiringAgreement[];
-    over_capacity_rooms: OverCapacity[];
+    expired_documents: ExpiringDocument[];
   };
   warning: {
     expiring_within_30_days: ExpiringAgreement[];
-    unassigned_employees: UnassignedEmployee[];
+    documents_expiring_within_30_days: ExpiringDocument[];
   };
   info: {
     expiring_within_90_days: ExpiringAgreement[];
+    documents_expiring_within_90_days: ExpiringDocument[];
     maintenance_in_progress: MaintenanceItem[];
   };
   counts: { critical: number; warning: number; info: number };
@@ -35,25 +40,19 @@ type Alerts = {
 };
 
 export default function AlertsPage() {
-  const [alerts, setAlerts] = useState<Alerts | null>(null);
-  const [loading, setLoading] = useState(true);
+  const alertsQuery = useQuery({
+    queryKey: keys.dashboard.alerts(),
+    queryFn: async () => (await api.get("/dashboard/alerts")).data.data as Alerts,
+  });
+  const alerts = alertsQuery.data ?? null;
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.get("/dashboard/alerts");
-        setAlerts(r.data.data);
-      } finally { setLoading(false); }
-    })();
-  }, []);
-
-  if (loading || !alerts) return <div className="text-sm text-muted-foreground animate-pulse">Loading alerts…</div>;
+  if (alertsQuery.isLoading || !alerts) return <div className="text-sm text-muted-foreground animate-pulse">Loading alerts…</div>;
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">Alerts</h1>
-        <p className="text-sm text-muted-foreground">Expiry, capacity, unassigned employees and active maintenance. Auto-refreshed on page load.</p>
+        <p className="text-sm text-muted-foreground">Agreement expiry, document renewals and active maintenance. Rent-due and cheque alerts join in later phases.</p>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -68,39 +67,28 @@ export default function AlertsPage() {
       <Section title="Agreements expiring within 7 days" tone="rose" icon={FileText} hidden={alerts.critical.expiring_within_7_days.length === 0}>
         <AgreementList items={alerts.critical.expiring_within_7_days} />
       </Section>
-      <Section title="Rooms over capacity" tone="rose" icon={BedDouble} hidden={alerts.critical.over_capacity_rooms.length === 0}>
-        <ul className="text-sm space-y-1">
-          {alerts.critical.over_capacity_rooms.map((r) => (
-            <li key={r.room_id} className="flex items-center gap-2">
-              <Link href={`/properties/${r.property_id}`} className="hover:text-primary">Room {r.room_number}</Link>
-              <span className="text-xs text-rose-600">{r.bed_count} / {r.capacity} beds</span>
-            </li>
-          ))}
-        </ul>
+      <Section title="Expired documents" tone="rose" icon={IdCard} hidden={alerts.critical.expired_documents.length === 0}>
+        <DocumentList items={alerts.critical.expired_documents} />
       </Section>
 
       <Section title="Agreements expiring within 30 days" tone="amber" icon={FileText} hidden={alerts.warning.expiring_within_30_days.length === 0}>
         <AgreementList items={alerts.warning.expiring_within_30_days} />
       </Section>
-      <Section title="Employees needing accommodation" tone="amber" icon={Users} hidden={alerts.warning.unassigned_employees.length === 0}>
-        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-          {alerts.warning.unassigned_employees.map((e) => (
-            <li key={e.id} className="flex items-center justify-between rounded-md border border-border bg-card/60 px-3 py-2">
-              <Link href={`/employees/${e.id}`} className="hover:text-primary">{e.full_name}</Link>
-              <span className="text-xs text-muted-foreground font-mono">{e.code}</span>
-            </li>
-          ))}
-        </ul>
+      <Section title="Documents expiring within 30 days" tone="amber" icon={IdCard} hidden={alerts.warning.documents_expiring_within_30_days.length === 0}>
+        <DocumentList items={alerts.warning.documents_expiring_within_30_days} />
       </Section>
 
       <Section title="Agreements expiring within 90 days" tone="sky" icon={FileText} hidden={alerts.info.expiring_within_90_days.length === 0}>
         <AgreementList items={alerts.info.expiring_within_90_days} />
       </Section>
+      <Section title="Documents expiring within 90 days" tone="sky" icon={IdCard} hidden={alerts.info.documents_expiring_within_90_days.length === 0}>
+        <DocumentList items={alerts.info.documents_expiring_within_90_days} />
+      </Section>
       <Section title="Active maintenance" tone="sky" icon={Wrench} hidden={alerts.info.maintenance_in_progress.length === 0}>
         <ul className="text-sm space-y-1">
           {alerts.info.maintenance_in_progress.map((m) => (
             <li key={m.id} className="flex items-center gap-2 flex-wrap">
-              <Link href="/transactions/maintenance" className="font-mono text-xs hover:text-primary">{m.transaction_number}</Link>
+              <span className="font-mono text-xs">{m.transaction_number}</span>
               <span className="text-xs text-muted-foreground capitalize">{m.entity_type} #{m.entity_id}</span>
               {m.reason && <span className="text-xs">· {m.reason}</span>}
               {m.expected_end_date && <span className="text-xs text-muted-foreground">· until {m.expected_end_date}</span>}
@@ -130,6 +118,27 @@ function AgreementList({ items }: { items: ExpiringAgreement[] }) {
             {a.days_left < 0 ? `expired ${Math.abs(a.days_left)}d ago` : `in ${a.days_left}d`}
           </span>
           <span className="font-mono text-xs">{a.expiry_date}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function DocumentList({ items }: { items: ExpiringDocument[] }) {
+  return (
+    <ul className="text-sm space-y-1">
+      {items.map((d) => (
+        <li key={d.attachment_id} className="flex items-center gap-2 flex-wrap">
+          <IdCard className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="font-medium">{d.entity_name ?? `${d.entity_type} #${d.entity_id}`}</span>
+          <span className="text-xs text-muted-foreground capitalize">
+            · {(d.category ?? "document").replaceAll("_", " ")}
+          </span>
+          {d.doc_number && <span className="font-mono text-xs">{d.doc_number}</span>}
+          <span className={"text-xs " + (d.days_left < 0 ? "text-rose-600" : "text-amber-600")}>
+            {d.days_left < 0 ? `expired ${Math.abs(d.days_left)}d ago` : `in ${d.days_left}d`}
+          </span>
+          <span className="font-mono text-xs">{d.expiry_date}</span>
         </li>
       ))}
     </ul>

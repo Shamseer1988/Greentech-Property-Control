@@ -12,7 +12,7 @@
 #  5. Seeds backend\.env from backend\.env.example on first run.
 #
 # It does NOT install PostgreSQL / Redis themselves — those are operator
-# steps documented in docs/BARE_METAL_WINDOWS.md.
+# steps documented in docs/DEPLOYMENT.md.
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path "$PSScriptRoot\.."
@@ -92,7 +92,7 @@ stub, not a real Python install. Pick one of these to continue:
 }
 
 if (-not $pythonCmd) {
-    Write-Error "No Python 3.11+ found. See docs/BARE_METAL_WINDOWS.md §1.2."
+    Write-Error "No Python 3.11+ found. See docs/DEPLOYMENT.md."
 }
 
 # -----------------------------------------------------------------------------
@@ -103,7 +103,7 @@ Write-Host "=== Other prereqs ===" -ForegroundColor Cyan
 foreach ($cmd in "node", "npm", "psql") {
     $found = Get-Command $cmd -ErrorAction SilentlyContinue
     if (-not $found) {
-        Write-Error "$cmd not found in PATH. Install it (see docs/BARE_METAL_WINDOWS.md) and re-run."
+        Write-Error "$cmd not found in PATH. Install it (see docs/DEPLOYMENT.md) and re-run."
     }
     $path = if ($found.Path) { $found.Path } else { $found.Source }
     Write-Host "  $cmd : $path"
@@ -153,6 +153,6 @@ if (-not (Test-Path "backend\.env")) {
 Write-Host ""
 Write-Host "Done. Next steps:" -ForegroundColor Green
 Write-Host "  1. Edit backend\.env (secrets, DB password)."
-Write-Host "  2. Create the Postgres database + role (see docs/BARE_METAL_WINDOWS.md §2.3)."
+Write-Host "  2. Create the Postgres database + role (see docs/DEPLOYMENT.md)."
 Write-Host "  3. Run: .\scripts\bootstrap-db.ps1   (one-time schema + seed)"
 Write-Host "  4. Run: .\scripts\start-all.ps1     (every time)"

@@ -14,6 +14,8 @@ type BackupFile = {
   size_bytes: number;
   size_human: string;
   created_at: string;
+  kind: "full" | "database";
+  attachments: number | null;
 };
 
 type BackupInfo = {
@@ -129,16 +131,21 @@ export function BackupPanel() {
   };
 
   const uploadAndRestore = async (file: File) => {
-    if (!file.name.endsWith(".dump")) {
+    const isFull = file.name.endsWith(".zip");
+    if (!isFull && !file.name.endsWith(".dump")) {
       toast.error(
         "Wrong file type",
-        "Only .dump files (custom pg_dump format) can be restored.",
+        "Restore takes a .zip full backup, or a .dump for the database alone.",
       );
       return;
     }
     if (!confirm(
       `Restore from uploaded "${file.name}"?\n\n` +
       "This OVERWRITES the live database with the contents of the file. " +
+      (isFull
+        ? "Uploaded files are replaced too; the current ones are kept in a dated folder. "
+        : "This is a database-only file, so attachments will NOT be restored and " +
+          "existing documents will no longer open. ") +
       "Take a backup first if you want to be able to roll back.",
     )) return;
 
@@ -174,7 +181,8 @@ export function BackupPanel() {
               <HardDrive className="h-4 w-4 text-primary" /> Backup files
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Database snapshots in <span className="font-mono">{info?.folder ?? "../backups"}</span>.
+              Database and uploaded documents, zipped together, in{" "}
+              <span className="font-mono">{info?.folder ?? "../backups"}</span>.
               The scheduled backup runs based on the setting above.
             </p>
           </div>
@@ -188,7 +196,7 @@ export function BackupPanel() {
             <input
               ref={uploadInputRef}
               type="file"
-              accept=".dump"
+              accept=".zip,.dump"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -239,6 +247,7 @@ export function BackupPanel() {
             <thead className="bg-card/40 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="text-left px-3 py-2 font-medium">File</th>
+                <th className="text-left px-3 py-2 font-medium">Contents</th>
                 <th className="text-left px-3 py-2 font-medium">Created</th>
                 <th className="text-right px-3 py-2 font-medium">Size</th>
                 <th className="text-right px-3 py-2 font-medium">Actions</th>
@@ -246,14 +255,23 @@ export function BackupPanel() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={4} className="px-3 py-6 text-center text-muted-foreground text-xs animate-pulse">Loading…</td></tr>
+                <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground text-xs animate-pulse">Loading…</td></tr>
               ) : files.length === 0 ? (
-                <tr><td colSpan={4} className="px-3 py-6 text-center text-muted-foreground text-xs">
+                <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground text-xs">
                   No backups yet. Click <span className="font-medium">Backup now</span> to create one.
                 </td></tr>
               ) : files.map((f) => (
                 <tr key={f.filename} className="border-t border-border/60 hover:bg-accent/30">
                   <td className="px-3 py-2 font-mono text-xs">{f.filename}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {f.kind === "full" ? (
+                      <span className="text-emerald-600">
+                        Database + {f.attachments ?? 0} file{f.attachments === 1 ? "" : "s"}
+                      </span>
+                    ) : (
+                      <span className="text-amber-600">Database only</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground inline-flex items-center gap-1">
                     <Clock className="h-3 w-3" /> {new Date(f.created_at).toLocaleString()}
                   </td>
@@ -304,6 +322,17 @@ export function BackupPanel() {
                     with the contents of <span className="font-mono">{confirmRestore}</span>.
                     Connected users may need to sign in again afterwards.
                   </p>
+                  {files.find((f) => f.filename === confirmRestore)?.kind === "database" ? (
+                    <p className="text-sm text-amber-600 mt-2">
+                      This file holds the database only. Uploaded documents will not be
+                      restored, and attachments in the restored data will no longer open.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Uploaded documents are replaced too. The current ones are moved to a
+                      dated folder beside the uploads directory, not deleted.
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex justify-end gap-2 pt-2">

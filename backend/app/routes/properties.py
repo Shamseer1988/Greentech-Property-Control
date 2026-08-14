@@ -2,18 +2,27 @@ from datetime import date, datetime
 from flask import Blueprint, request
 
 from ..extensions import db
-from ..models import Property, PropertyAgreement, Landlord, Division, Floor, Room, Bed, Employee
-from ..services import audit, codes, reminders, occupancy, layout as layout_service
+from ..models import Property, PropertyAgreement, PropertyType, Landlord, Floor, Unit
+from ..services import audit, codes, reminders, layout as layout_service
+from ..services import contracts as contract_service
 from ..utils.auth import require_permission, current_user
 from ..utils.responses import success_response, error_response
 
 properties_bp = Blueprint("properties", __name__)
 
-PROPERTY_TYPES = {
-    "full_building", "partial_building", "one_floor_only",
-    "villa", "apartment", "labour_camp", "staff_flat",
-    "shared_accommodation", "temporary_accommodation",
-}
+# Seed values for the property_types master table (cli.py seed()) — the
+# set itself is no longer the source of truth for validation, only the
+# starting data. See PropertyType in models/property.py.
+DEFAULT_PROPERTY_TYPES = [
+    ("full_building", "Full building"),
+    ("building_with_store", "Building with store"),
+    ("flat_building", "Flat building"),
+    ("villa", "Villa"),
+    ("labour_camp", "Labour camp"),
+    ("store", "Store"),
+    ("mixed_use", "Mixed use"),
+    ("compound", "Compound"),
+]
 OWNERSHIP_TYPES = {"rented", "company_owned", "temporary"}
 STATUSES = {"active", "inactive", "maintenance", "on_hold", "vacated"}
 USER_FACING_STATUSES = {"active", "inactive", "maintenance", "on_hold"}
@@ -21,7 +30,7 @@ USER_FACING_STATUSES = {"active", "inactive", "maintenance", "on_hold"}
 EDITABLE_FIELDS = {
     "name", "property_type", "building_number", "zone", "street", "area", "city",
     "map_link", "gps_lat", "gps_lng", "ownership_type", "managed_by",
-    "default_division_id", "landlord_id", "multi_division_allowed", "remarks",
+    "landlord_id", "remarks",
 }
 # `status` is intentionally NOT here — it must go through /status so the
 # occupancy guard cannot be bypassed.
@@ -35,15 +44,21 @@ def _parse_date(value):
     return datetime.fromisoformat(value).date()
 
 
+def _valid_property_type(code: str) -> bool:
+    """A property type is only offerable while active — a deactivated
+    type stays valid on properties that already carry it (the column is
+    free text, never enforced by an FK), just not selectable for new or
+    edited ones."""
+    return db.session.query(PropertyType.id).filter_by(code=code, is_active=True).first() is not None
+
+
 def _counts_for(prop_id: int) -> dict:
-    """Live counts of floors, rooms and beds for a property."""
+    """Live counts of floors and units for a property."""
     return {
         "floors_count": db.session.query(db.func.count(Floor.id))
             .filter(Floor.property_id == prop_id).scalar() or 0,
-        "rooms_count": db.session.query(db.func.count(Room.id))
-            .filter(Room.property_id == prop_id).scalar() or 0,
-        "beds_count": db.session.query(db.func.count(Bed.id))
-            .filter(Bed.property_id == prop_id).scalar() or 0,
+        "units_count": db.session.query(db.func.count(Unit.id))
+            .filter(Unit.property_id == prop_id).scalar() or 0,
     }
 
 
@@ -56,23 +71,16 @@ def _counts_for_many(prop_ids: list[int]) -> dict[int, dict]:
         .filter(Floor.property_id.in_(prop_ids))
         .group_by(Floor.property_id).all()
     )
-    room_rows = (
-        db.session.query(Room.property_id, db.func.count(Room.id))
-        .filter(Room.property_id.in_(prop_ids))
-        .group_by(Room.property_id).all()
+    unit_rows = (
+        db.session.query(Unit.property_id, db.func.count(Unit.id))
+        .filter(Unit.property_id.in_(prop_ids))
+        .group_by(Unit.property_id).all()
     )
-    bed_rows = (
-        db.session.query(Bed.property_id, db.func.count(Bed.id))
-        .filter(Bed.property_id.in_(prop_ids))
-        .group_by(Bed.property_id).all()
-    )
-    out: dict[int, dict] = {pid: {"floors_count": 0, "rooms_count": 0, "beds_count": 0} for pid in prop_ids}
+    out: dict[int, dict] = {pid: {"floors_count": 0, "units_count": 0} for pid in prop_ids}
     for pid, n in floor_rows:
         out[pid]["floors_count"] = n
-    for pid, n in room_rows:
-        out[pid]["rooms_count"] = n
-    for pid, n in bed_rows:
-        out[pid]["beds_count"] = n
+    for pid, n in unit_rows:
+        out[pid]["units_count"] = n
     return out
 
 
@@ -81,8 +89,10 @@ def _counts_for_many(prop_ids: list[int]) -> dict[int, dict]:
 def list_properties():
     q = (request.args.get("q") or "").strip().lower()
     status = request.args.get("status")
+    exclude_status = request.args.get("exclude_status")
     ptype = request.args.get("type")
     city = request.args.get("city")
+    landlord_id = request.args.get("landlord_id", type=int)
 
     query = Property.query
     if q:
@@ -97,19 +107,76 @@ def list_properties():
         )
     if status:
         query = query.filter_by(status=status)
+    elif exclude_status:
+        # "Show deactivated" unchecked: hide inactive without also hiding
+        # maintenance/on_hold, which aren't a deactivation state.
+        query = query.filter(Property.status != exclude_status)
     if ptype:
         query = query.filter_by(property_type=ptype)
     if city:
         query = query.filter(db.func.lower(Property.city) == city.lower())
+    if landlord_id:
+        query = query.filter_by(landlord_id=landlord_id)
 
     rows = query.order_by(Property.name.asc()).all()
     counts = _counts_for_many([r.id for r in rows])
     data = []
     for r in rows:
         d = r.to_dict()
-        d.update(counts.get(r.id, {"floors_count": 0, "rooms_count": 0, "beds_count": 0}))
+        d.update(counts.get(r.id, {"floors_count": 0, "units_count": 0}))
         data.append(d)
     return success_response(data=data, meta={"count": len(rows)})
+
+
+# ------------------------------------------------------------ prop types
+
+@properties_bp.get("/types")
+@require_permission("property.view")
+def list_property_types():
+    query = PropertyType.query
+    if request.args.get("active_only") in ("1", "true", "yes"):
+        query = query.filter_by(is_active=True)
+    rows = query.order_by(PropertyType.name.asc()).all()
+    return success_response(data=[r.to_dict() for r in rows], meta={"count": len(rows)})
+
+
+@properties_bp.post("/types")
+@require_permission("settings.manage")
+def create_property_type():
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get("name") or "").strip()
+    code = (payload.get("code") or "").strip() or name.upper().replace(" ", "_")[:32]
+    if not name:
+        return error_response("name is required", 400)
+    if PropertyType.query.filter(db.func.lower(PropertyType.code) == code.lower()).first():
+        return error_response("A property type with that code already exists", 409)
+
+    actor = current_user()
+    ptype = PropertyType(code=code, name=name, remarks=payload.get("remarks"),
+                         created_by=actor.id, updated_by=actor.id)
+    db.session.add(ptype)
+    db.session.commit()
+    return success_response(data=ptype.to_dict(), message="Property type created", status=201)
+
+
+@properties_bp.patch("/types/<int:type_id>")
+@require_permission("settings.manage")
+def update_property_type(type_id: int):
+    ptype = PropertyType.query.get_or_404(type_id)
+    payload = request.get_json(silent=True) or {}
+    actor = current_user()
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return error_response("name cannot be empty", 400)
+        ptype.name = name
+    if "remarks" in payload:
+        ptype.remarks = payload.get("remarks")
+    if "is_active" in payload:
+        ptype.is_active = bool(payload["is_active"])
+    ptype.updated_by = actor.id
+    db.session.commit()
+    return success_response(data=ptype.to_dict(), message="Property type updated")
 
 
 @properties_bp.get("/<int:prop_id>")
@@ -129,17 +196,14 @@ def create_property():
     ptype = (payload.get("property_type") or "").strip()
     if not name or not ptype:
         return error_response("name and property_type are required", 400)
-    if ptype not in PROPERTY_TYPES:
-        return error_response(f"property_type must be one of {sorted(PROPERTY_TYPES)}", 400)
+    if not _valid_property_type(ptype):
+        return error_response(f"Unknown or inactive property_type '{ptype}'", 400)
 
     actor = current_user()
     code = (payload.get("code") or "").strip() or codes.next_code(Property, codes.prefix_for("property"))
     if Property.query.filter(db.func.lower(Property.code) == code.lower()).first():
         return error_response("Code already exists", 409)
 
-    if payload.get("default_division_id"):
-        if not Division.query.get(payload["default_division_id"]):
-            return error_response("default_division_id not found", 400)
     if payload.get("landlord_id"):
         if not Landlord.query.get(payload["landlord_id"]):
             return error_response("landlord_id not found", 400)
@@ -164,19 +228,27 @@ def create_property():
         if not isinstance(layout, dict):
             db.session.rollback()
             return error_response("layout must be an object", 400)
+        buildings = layout.get("buildings")
         try:
-            layout_counts = layout_service.generate_structure(
-                prop,
-                floors=int(layout.get("floors", 0) or 0),
-                rooms_per_floor=int(layout.get("rooms_per_floor", 0) or 0),
-                beds_per_room=int(layout.get("beds_per_room", 0) or 0),
-                floor_prefix=str(layout.get("floor_prefix") or "").strip(),
-                room_prefix=str(layout.get("room_prefix") or "").strip(),
-                ground_floor=bool(layout.get("ground_floor", False)),
-                default_room_type=str(layout.get("default_room_type") or "shared"),
-                default_bed_type=str(layout.get("default_bed_type") or "single"),
-                actor=actor,
-            )
+            if buildings:
+                # Compound mode: one property standing in for several
+                # buildings, each with its own floors, rooms and stores.
+                if not isinstance(buildings, list):
+                    raise TypeError("layout.buildings must be a list")
+                layout_counts = layout_service.generate_compound_structure(
+                    prop, buildings=buildings, actor=actor,
+                )
+            else:
+                layout_counts = layout_service.generate_structure(
+                    prop,
+                    floors=int(layout.get("floors", 0) or 0),
+                    units_per_floor=int(layout.get("units_per_floor", 0) or 0),
+                    floor_prefix=str(layout.get("floor_prefix") or "").strip(),
+                    unit_prefix=str(layout.get("unit_prefix") or "").strip(),
+                    ground_floor=bool(layout.get("ground_floor", False)),
+                    default_unit_type=str(layout.get("default_unit_type") or "room"),
+                    actor=actor,
+                )
         except layout_service.LayoutError as e:
             db.session.rollback()
             return error_response(str(e), 400)
@@ -204,13 +276,16 @@ def update_property(prop_id: int):
             "Status changes go through POST /properties/{id}/status — see the property control modal.",
             400,
         )
-    if "property_type" in payload and payload["property_type"] not in PROPERTY_TYPES:
-        return error_response("Invalid property_type", 400)
+    if "property_type" in payload and payload["property_type"] != prop.property_type \
+            and not _valid_property_type(payload["property_type"]):
+        # A deactivated type stays legal to resave unchanged (an edit form
+        # that always round-trips every field shouldn't be blocked from
+        # saving other changes just because this property's type has since
+        # been retired) — it only becomes an error when actually switching
+        # to something invalid or inactive.
+        return error_response("Invalid or inactive property_type", 400)
     if "ownership_type" in payload and payload["ownership_type"] not in OWNERSHIP_TYPES:
         return error_response("Invalid ownership_type", 400)
-    if "default_division_id" in payload and payload["default_division_id"]:
-        if not Division.query.get(payload["default_division_id"]):
-            return error_response("default_division_id not found", 400)
     if "landlord_id" in payload and payload["landlord_id"]:
         if not Landlord.query.get(payload["landlord_id"]):
             return error_response("landlord_id not found", 400)
@@ -226,38 +301,26 @@ def update_property(prop_id: int):
 
 
 def _occupancy_snapshot(prop_id: int) -> dict:
-    """Counts and a sample of who's still in the property — used to
-    explain blocked status changes."""
+    """Counts of units still held — used to explain blocked status changes.
+
+    From Phase 2 the occupied count derives from active client-contract
+    unit assignments; today it reads the unit status field."""
     occupied = (
-        db.session.query(db.func.count(Bed.id))
-        .filter(Bed.property_id == prop_id, Bed.status == "occupied")
-        .scalar() or 0
-    )
-    reserved = (
-        db.session.query(db.func.count(Bed.id))
-        .filter(Bed.property_id == prop_id, Bed.status == "reserved")
+        db.session.query(db.func.count(Unit.id))
+        .filter(Unit.property_id == prop_id, Unit.occupancy_status == "occupied")
         .scalar() or 0
     )
     sample: list[dict] = []
     if occupied:
-        beds = (
-            Bed.query
-            .filter(Bed.property_id == prop_id, Bed.status == "occupied")
+        units = (
+            Unit.query
+            .filter(Unit.property_id == prop_id, Unit.occupancy_status == "occupied")
             .limit(10).all()
         )
-        for b in beds:
-            emp = (
-                Employee.query
-                .filter(Employee.current_bed_id == b.id)
-                .first()
-            )
-            if emp:
-                sample.append({
-                    "employee_id": emp.id, "employee_code": emp.code,
-                    "employee_name": emp.full_name,
-                    "bed_id": b.id, "bed_code": b.bed_code,
-                })
-    return {"occupied": occupied, "reserved": reserved, "sample": sample}
+        sample = [{
+            "unit_id": u.id, "unit_number": u.unit_number, "unit_type": u.unit_type,
+        } for u in units]
+    return {"occupied": occupied, "sample": sample}
 
 
 @properties_bp.post("/<int:prop_id>/status")
@@ -278,22 +341,21 @@ def change_property_status(prop_id: int):
     if new_status != "active" and not reason:
         return error_response("reason is required when moving away from active", 400)
 
-    # Guard: refuse to move out of active while beds are held.
+    # Guard: refuse to move out of active while units are held.
     if new_status != "active":
         snap = _occupancy_snapshot(prop.id)
-        if snap["occupied"] or snap["reserved"]:
+        if snap["occupied"]:
             return error_response(
                 (
                     f"Cannot set {prop.name} to {new_status} — "
-                    f"{snap['occupied']} bed(s) occupied and {snap['reserved']} reserved. "
-                    "Cancel or transfer those assignments first."
+                    f"{snap['occupied']} unit(s) occupied. "
+                    "Release or cancel those contracts first."
                 ),
                 status=409,
                 details={
                     "blocked": True,
                     "occupied": snap["occupied"],
-                    "reserved": snap["reserved"],
-                    "sample_employees": snap["sample"],
+                    "sample_units": snap["sample"],
                 },
             )
 
@@ -330,19 +392,18 @@ def deactivate_property(prop_id: int):
     if prop.status == "inactive":
         return error_response("Property is already inactive", 400)
     snap = _occupancy_snapshot(prop.id)
-    if snap["occupied"] or snap["reserved"]:
+    if snap["occupied"]:
         return error_response(
             (
                 f"Cannot deactivate {prop.name} — "
-                f"{snap['occupied']} bed(s) occupied and {snap['reserved']} reserved. "
-                "Cancel or transfer those assignments first."
+                f"{snap['occupied']} unit(s) occupied. "
+                "Release or cancel those contracts first."
             ),
             status=409,
             details={
                 "blocked": True,
                 "occupied": snap["occupied"],
-                "reserved": snap["reserved"],
-                "sample_employees": snap["sample"],
+                "sample_units": snap["sample"],
             },
         )
     actor = current_user()
@@ -399,13 +460,16 @@ def create_agreement(prop_id: int):
         PropertyAgreement.query.filter_by(property_id=prop_id, is_active=True).all()
     )
     for p in previous:
-        p.is_active = False
+        p.status = "renewed"
         p.renewal_status = "renewed"
         p.updated_by = actor.id
+
+    from ..services import landlord_contracts as lc_service
 
     ag = PropertyAgreement(
         property_id=prop.id,
         landlord_id=landlord_id,
+        contract_number=lc_service.next_landlord_contract_number(),
         agreement_number=payload.get("agreement_number"),
         start_date=start,
         expiry_date=expiry,
@@ -417,7 +481,8 @@ def create_agreement(prop_id: int):
         kahramaa_account=payload.get("kahramaa_account"),
         municipality_ref=payload.get("municipality_ref"),
         reminder_days_before_expiry=int(payload.get("reminder_days_before_expiry") or 90),
-        is_active=True,
+        payment_mode=payload.get("payment_mode") or "cheque",
+        opening_balance=payload.get("opening_balance") or 0,
         remarks=payload.get("remarks"),
         created_by=actor.id,
         updated_by=actor.id,
@@ -445,7 +510,7 @@ def update_agreement(prop_id: int, ag_id: int):
     for k in (
         "agreement_number", "monthly_rent", "security_deposit", "payment_terms",
         "notice_period", "renewal_status", "kahramaa_account", "municipality_ref",
-        "reminder_days_before_expiry", "remarks",
+        "reminder_days_before_expiry", "remarks", "payment_mode", "opening_balance",
     ):
         if k in payload:
             setattr(ag, k, payload[k])
@@ -461,14 +526,7 @@ def update_agreement(prop_id: int, ag_id: int):
     return success_response(data=ag.to_dict(), message="Agreement updated")
 
 
-# ---------- Reminders ----------
-
-@properties_bp.get("/<int:prop_id>/occupancy")
-@require_permission("property.view")
-def property_occupancy(prop_id: int):
-    Property.query.get_or_404(prop_id)
-    return success_response(data=occupancy.property_summary(prop_id))
-
+# ---------- Structure ----------
 
 @properties_bp.get("/<int:prop_id>/structure")
 @require_permission("property.view")
@@ -479,86 +537,57 @@ def property_structure(prop_id: int):
         .order_by(Floor.floor_number.asc())
         .all()
     )
+    all_units = (
+        Unit.query.filter_by(property_id=prop_id)
+        .order_by(Unit.unit_number.asc())
+        .all()
+    )
+    by_floor: dict[int, list[Unit]] = {}
+    for u in all_units:
+        by_floor.setdefault(u.floor_id, []).append(u)
 
-    # Phase 4: enrich every occupied/reserved bed with its current employee
-    # block so the floor plan can render names + divisions without N+1.
-    # We collect employee ids across the whole property first, then load
-    # them with a single joinedload(division) query.
-    from sqlalchemy.orm import joinedload  # local import: only this endpoint needs it
-
-    bed_rows_by_room: dict[int, list[Bed]] = {}
-    employee_ids: set[int] = set()
-    for f in floors:
-        rooms = (
-            Room.query.filter_by(floor_id=f.id)
-            .order_by(Room.room_number.asc())
-            .all()
-        )
-        for r in rooms:
-            beds = (
-                Bed.query.filter_by(room_id=r.id)
-                .order_by(Bed.bed_number.asc())
-                .all()
-            )
-            bed_rows_by_room[r.id] = beds
-            for b in beds:
-                if b.current_employee_id is not None:
-                    employee_ids.add(b.current_employee_id)
-
-    emp_block: dict[int, dict] = {}
-    if employee_ids:
-        emps = (
-            Employee.query
-            .options(joinedload(Employee.division))
-            .filter(Employee.id.in_(employee_ids))
-            .all()
-        )
-        for e in emps:
-            emp_block[e.id] = {
-                "id": e.id,
-                "code": e.code,
-                "full_name": e.full_name,
-                "division_name": e.division.name if e.division else None,
-                "designation": e.designation,
-            }
+    # One query for every occupied unit on the property, keyed by unit_id —
+    # the floor plan's hover popup needs to know who's in each unit today.
+    holders = contract_service.units_held_on([u.id for u in all_units], date.today())
 
     out = []
     for f in floors:
-        rooms = (
-            Room.query.filter_by(floor_id=f.id)
-            .order_by(Room.room_number.asc())
-            .all()
-        )
-        room_list = []
-        for r in rooms:
-            beds = bed_rows_by_room.get(r.id, [])
-            bed_dicts = []
-            for b in beds:
-                bd = b.to_dict()
-                bd["current_employee"] = emp_block.get(b.current_employee_id) if b.current_employee_id else None
-                bed_dicts.append(bd)
-            r_dict = r.to_dict()
-            r_dict["beds"] = bed_dicts
-            room_list.append(r_dict)
         f_dict = f.to_dict()
-        f_dict["rooms"] = room_list
+        unit_dicts = []
+        for u in by_floor.get(f.id, []):
+            d = u.to_dict()
+            contract = holders.get(u.id)
+            if contract is not None:
+                d["occupant"] = {
+                    "client_id": contract.client_id,
+                    "client_name": contract.client.name if contract.client else None,
+                    "contract_id": contract.id,
+                    "contract_number": contract.contract_number,
+                    "monthly_rent": float(contract.monthly_rent) if contract.monthly_rent is not None else None,
+                    "start_date": contract.start_date.isoformat() if contract.start_date else None,
+                    "expiry_date": contract.expiry_date.isoformat() if contract.expiry_date else None,
+                }
+            else:
+                d["occupant"] = None
+            unit_dicts.append(d)
+        f_dict["units"] = unit_dicts
         out.append(f_dict)
     return success_response(data=out, meta={"count": len(out)})
 
 
-@properties_bp.post("/<int:prop_id>/floors/<int:floor_id>/renumber-rooms")
-@require_permission("room.manage")
-def renumber_rooms(prop_id: int, floor_id: int):
-    """Phase 6: bulk-rename rooms on a floor using a new prefix.
+@properties_bp.post("/<int:prop_id>/floors/<int:floor_id>/renumber-units")
+@require_permission("unit.manage")
+def renumber_units(prop_id: int, floor_id: int):
+    """Bulk-rename units on a floor using a new prefix.
 
-    Body: ``{"room_prefix": str, "force": bool=false}``.
+    Body: ``{"unit_prefix": str, "force": bool=false}``.
 
-    The new room number for room index i (1..N within the floor) is
-    ``{room_prefix}{floor_seq}{nn}`` where ``floor_seq`` strips a single
+    The new unit number for unit index i (1..N within the floor) is
+    ``{unit_prefix}{floor_seq}{nn}`` where ``floor_seq`` strips a single
     optional letter prefix from the stored floor_number (so "F1" -> "1",
-    "G" -> "G"). Cascades to every bed's bed_code via occupancy.bed_code.
+    "G" -> "G").
 
-    Refuses with 409 if any room on the floor has an occupied bed unless
+    Refuses with 409 if any unit on the floor is occupied unless
     ``force=true`` is supplied — caller takes responsibility. The rename
     is two-phase: every row touched is first set to a guaranteed-unique
     temp name, then to its final name, so the UNIQUE constraint never
@@ -567,92 +596,79 @@ def renumber_rooms(prop_id: int, floor_id: int):
     prop = Property.query.get_or_404(prop_id)
     floor = Floor.query.filter_by(id=floor_id, property_id=prop.id).first_or_404()
     payload = request.get_json(silent=True) or {}
-    new_prefix = str(payload.get("room_prefix") or "").strip()
+    new_prefix = str(payload.get("unit_prefix") or "").strip()
     force = bool(payload.get("force", False))
 
-    rooms = (
-        Room.query.filter_by(floor_id=floor.id)
-        .order_by(Room.room_number.asc())
+    units = (
+        Unit.query.filter_by(floor_id=floor.id)
+        .order_by(Unit.unit_number.asc())
         .all()
     )
-    if not rooms:
+    if not units:
         return success_response(
-            data={"renamed": 0, "rooms": []},
-            message="No rooms on this floor",
+            data={"renamed": 0, "units": []},
+            message="No units on this floor",
         )
 
-    # Detect occupied beds across the floor before touching anything.
+    # Detect occupied units across the floor before touching anything.
     if not force:
         occupied = (
-            db.session.query(db.func.count(Bed.id))
-            .filter(Bed.floor_id == floor.id, Bed.status == "occupied")
+            db.session.query(db.func.count(Unit.id))
+            .filter(Unit.floor_id == floor.id, Unit.occupancy_status == "occupied")
             .scalar() or 0
         )
         if occupied:
             return error_response(
-                f"Floor has {occupied} occupied bed(s). "
-                "Resolve the assignments first or re-send with force=true.",
+                f"Floor has {occupied} occupied unit(s). "
+                "Release the contracts first or re-send with force=true.",
                 status=409,
                 details={"occupied": occupied, "force_required": True},
             )
 
-    # Determine floor_seq for room numbers (same rule as layout generator).
+    # Determine floor_seq for unit numbers (same rule as layout generator).
     raw = floor.floor_number
-    # Strip a leading letter prefix to recover the numeric sequence; if
-    # the floor is "G" we keep it as-is.
     floor_seq = raw if raw == "G" or raw.startswith("G") and len(raw) > 1 and raw[1:].isalpha() else (
         "".join(ch for ch in raw if ch.isdigit()) or raw
     )
     if not floor_seq:
         floor_seq = raw  # final fallback
 
-    room_pad = max(2, len(str(len(rooms))))
+    unit_pad = max(2, len(str(len(units))))
     actor = current_user()
 
-    # Build rename map: (room, old_number, new_number).
-    renames: list[tuple[Room, str, str]] = []
-    for idx, room in enumerate(rooms, start=1):
-        new_no = f"{new_prefix}{floor_seq}{idx:0{room_pad}d}"
-        renames.append((room, room.room_number, new_no))
+    # Build rename map: (unit, old_number, new_number).
+    renames: list[tuple[Unit, str, str]] = []
+    for idx, unit in enumerate(units, start=1):
+        new_no = f"{new_prefix}{floor_seq}{idx:0{unit_pad}d}"
+        renames.append((unit, unit.unit_number, new_no))
 
     # No-op if nothing changes.
     if all(old == new for _, old, new in renames):
         return success_response(
-            data={"renamed": 0, "rooms": [r.to_dict() for r, _, _ in renames]},
-            message="Room numbers already match the requested prefix",
+            data={"renamed": 0, "units": [u.to_dict() for u, _, _ in renames]},
+            message="Unit numbers already match the requested prefix",
         )
 
-    # Phase A: park every affected bed_code at a unique temp value so
-    # the room rename can't collide on the UNIQUE bed_code index.
-    for room, _, _ in renames:
-        for bed in room.beds or []:
-            bed.bed_code = f"__TMP_BED_{bed.id}__"
+    # Phase A: park every affected unit_number at a unique temp value so
+    # the rename can't collide on the UNIQUE constraint.
+    for unit, _, _ in renames:
+        unit.unit_number = f"__TMP_UNIT_{unit.id}__"
     db.session.flush()
 
-    # Phase B: park every affected room_number at a unique temp value.
-    for room, _, _ in renames:
-        room.room_number = f"__TMP_ROOM_{room.id}__"
-    db.session.flush()
-
-    # Phase C: assign final room numbers + recomputed bed_codes.
+    # Phase B: assign final unit numbers.
     old_to_new: list[dict] = []
-    for room, old_number, new_no in renames:
-        room.room_number = new_no
-        room.updated_by = actor.id
-        for bed in room.beds or []:
-            bed.bed_code = occupancy.bed_code(
-                prop.code, floor.floor_number, new_no, bed.bed_number,
-            )
-            bed.updated_by = actor.id
+    for unit, old_number, new_no in renames:
+        unit.unit_number = new_no
+        unit.updated_by = actor.id
         old_to_new.append({
-            "room_id": room.id,
-            "old_room_number": old_number,
-            "new_room_number": new_no,
+            "unit_id": unit.id,
+            "old_unit_number": old_number,
+            "new_unit_number": new_no,
         })
         audit.record(
-            user=actor, action="renumber", module="room",
-            entity_type="room", entity_id=room.id,
-            new_value={"room_number": new_no},
+            user=actor, action="renumber", module="unit",
+            entity_type="unit", entity_id=unit.id,
+            new_value={"unit_number": new_no},
             remarks=f"floor {floor.floor_number} prefix='{new_prefix}'",
         )
     db.session.flush()
@@ -662,21 +678,23 @@ def renumber_rooms(prop_id: int, floor_id: int):
         entity_type="floor", entity_id=floor.id,
         new_value={
             "renamed": len(renames),
-            "room_prefix": new_prefix,
+            "unit_prefix": new_prefix,
             "force": force,
         },
-        remarks=f"Renumbered {len(renames)} rooms on floor {floor.floor_number}",
+        remarks=f"Renumbered {len(renames)} units on floor {floor.floor_number}",
     )
     db.session.commit()
     return success_response(
         data={
             "renamed": len(renames),
-            "rooms": [r.to_dict() for r, _, _ in renames],
+            "units": [u.to_dict() for u, _, _ in renames],
             "diff": old_to_new,
         },
-        message=f"Renumbered {len(renames)} room(s) on floor {floor.floor_number}",
+        message=f"Renumbered {len(renames)} unit(s) on floor {floor.floor_number}",
     )
 
+
+# ---------- Reminders ----------
 
 @properties_bp.get("/agreements/expiring")
 @require_permission("property.view")

@@ -1,0 +1,28 @@
+[Unit]
+Description=GreenTech Real Estate Portal — Next.js frontend
+After=network.target greentech-backend.service
+
+[Service]
+Type=simple
+User=greentech
+Group=greentech
+WorkingDirectory=/opt/greentech/frontend
+# Optional runtime config — NODE_ENV / HOSTNAME / PORT for `next start`.
+# Missing file is fine (leading `-`); the sh-c wrapper falls back to
+# loopback defaults so topology A still works zero-touch. Topology B
+# (shared edge-nginx CT) flips HOSTNAME to 0.0.0.0 in this file. See
+# docs/FRESH_DEPLOY_LXC_EDGE.md.
+EnvironmentFile=-/opt/greentech/frontend/.env.runtime
+ExecStart=/bin/sh -c 'exec /usr/bin/env NODE_ENV=${NODE_ENV:-production} HOSTNAME=${HOSTNAME:-127.0.0.1} PORT=${PORT:-3000} /usr/bin/npm start'
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

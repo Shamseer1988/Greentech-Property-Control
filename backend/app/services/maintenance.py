@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
 from ..extensions import db
-from ..models import Property, Room, Bed, MaintenanceRecord
+from ..models import Property, Unit, MaintenanceRecord
 from ..models.renewal_maintenance import (
     MAINTENANCE_ENTITY_TYPES, generate_renewal_or_maintenance_number,
 )
@@ -24,9 +24,8 @@ def _parse_date(value, fallback: date | None = None) -> date | None:
 def _restorable_status(prior_status: str, entity_type: str) -> str:
     # Only restore to operationally safe states. If the entity was in a
     # transient/derived state previously, fall back to the canonical default.
-    safe_defaults = {"property": "active", "room": "empty", "bed": "empty"}
-    if entity_type == "room" and prior_status in {"partially_occupied", "full"}:
-        # Status will be recomputed from bed occupancy after restoration
+    safe_defaults = {"property": "active", "unit": "empty"}
+    if entity_type == "unit" and prior_status in {"partially_occupied", "full"}:
         return "empty"
     return prior_status or safe_defaults[entity_type]
 
@@ -70,33 +69,16 @@ def start_maintenance(
         prop.updated_by = actor_id
         property_id = prop.id
 
-    elif entity_type == "room":
-        room = Room.query.get(entity_id)
-        if room is None:
-            raise MaintenanceError("Room not found")
-        occupied = [b for b in (room.beds or []) if b.status == "occupied"]
-        if occupied:
-            raise MaintenanceError(
-                f"Room has {len(occupied)} occupied bed(s); transfer or release them first."
-            )
-        prior_status = room.occupancy_status
-        room.occupancy_status = "maintenance"
-        room.updated_by = actor_id
-        property_id = room.property_id
-
-    else:  # bed
-        bed = Bed.query.get(entity_id)
-        if bed is None:
-            raise MaintenanceError("Bed not found")
-        if bed.status == "occupied":
-            raise MaintenanceError("Bed is occupied; release the assignment before maintenance.")
-        if bed.status == "reserved":
-            raise MaintenanceError("Bed is reserved for a returning employee; release the reservation first.")
-        prior_status = bed.status
-        bed.status = "maintenance"
-        bed.updated_by = actor_id
-        property_id = bed.property_id
-        bed.room.recompute_status()
+    else:  # unit
+        unit = Unit.query.get(entity_id)
+        if unit is None:
+            raise MaintenanceError("Unit not found")
+        if unit.occupancy_status == "occupied":
+            raise MaintenanceError("Unit is occupied; release the contract allocation first.")
+        prior_status = unit.occupancy_status
+        unit.occupancy_status = "maintenance"
+        unit.updated_by = actor_id
+        property_id = unit.property_id
 
     record = MaintenanceRecord(
         transaction_number=generate_renewal_or_maintenance_number("MAINT"),
@@ -140,19 +122,11 @@ def complete_maintenance(
             prop.status = restored
             prop.updated_by = actor_id
 
-    elif record.entity_type == "room":
-        room = Room.query.get(record.entity_id)
-        if room is not None:
-            room.occupancy_status = restored
-            room.recompute_status()
-            room.updated_by = actor_id
-
-    else:  # bed
-        bed = Bed.query.get(record.entity_id)
-        if bed is not None:
-            bed.status = restored
-            bed.updated_by = actor_id
-            bed.room.recompute_status()
+    else:  # unit
+        unit = Unit.query.get(record.entity_id)
+        if unit is not None:
+            unit.occupancy_status = restored
+            unit.updated_by = actor_id
 
     record.status = "completed"
     record.actual_end_date = when_end

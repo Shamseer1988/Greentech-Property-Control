@@ -50,7 +50,7 @@ export const useAuth = create<AuthState>()(
       },
     }),
     {
-      name: "pug-auth",
+      name: "greentech-auth",
       // Only the user profile is persisted now; JWTs live in httpOnly
       // cookies the browser manages for us, so there's nothing else
       // worth surviving a reload.

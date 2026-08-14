@@ -97,7 +97,7 @@ def test_metrics_open_when_no_token_configured(client):
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     assert "# HELP" in body  # Prometheus exposition format
-    assert "pug_app_info" in body
+    assert "greentech_app_info" in body
 
 
 def test_metrics_requires_token_when_configured(tmp_path, monkeypatch):

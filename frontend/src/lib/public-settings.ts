@@ -20,7 +20,7 @@ type PublicSettings = {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
-const DEFAULT_NAME = process.env.NEXT_PUBLIC_APP_NAME || "PUG Accommodation Portal";
+const DEFAULT_NAME = process.env.NEXT_PUBLIC_APP_NAME || "GreenTech Real Estate Portal";
 
 export const usePublicSettings = create<PublicSettings>((set, get) => ({
   companyName: DEFAULT_NAME,

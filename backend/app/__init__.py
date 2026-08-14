@@ -25,7 +25,7 @@ def create_app(config_name: str | None = None) -> APIFlask:
     docs_on = _docs_enabled(env)
     app = APIFlask(
         __name__,
-        title="PUG Accommodation Management API",
+        title="GreenTech Real Estate API",
         version="1.0.0",
         docs_path="/docs" if docs_on else None,
         spec_path="/openapi.json" if docs_on else None,
@@ -84,19 +84,19 @@ def create_app(config_name: str | None = None) -> APIFlask:
     from .routes.users import users_bp
     from .routes.roles import roles_bp
     from .routes.audit import audit_bp
-    from .routes.divisions import divisions_bp
     from .routes.landlords import landlords_bp
+    from .routes.clients import clients_bp
+    from .routes.contracts import contracts_bp
+    from .routes.rent import rent_bp
+    from .routes.expenses import expenses_bp
     from .routes.properties import properties_bp
+    from .routes.landlord_contracts import landlord_contracts_bp
+    from .routes.agreements import agreements_bp
     from .routes.attachments import attachments_bp
     from .routes.floors import floors_bp
-    from .routes.rooms import rooms_bp
-    from .routes.beds import beds_bp
-    from .routes.employees import employees_bp
-    from .routes.assignments import assignments_bp
-    from .routes.movements import movements_bp
+    from .routes.units import units_bp
     from .routes.renewals import renewals_bp
     from .routes.maintenance import maintenance_bp
-    from .routes.bulk_movements import bulk_bp
     from .routes.search import search_bp
     from .routes.notifications import notifications_bp
     from .routes.events import events_bp
@@ -105,25 +105,27 @@ def create_app(config_name: str | None = None) -> APIFlask:
     from .routes.approvals import approvals_bp
     from .routes.settings import settings_bp
     from .routes.backup import backup_bp
+    from .routes.messaging import messaging_bp
+    from .routes.migration import migration_bp
 
     app.register_blueprint(health_bp, url_prefix="/api/v1")
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
     app.register_blueprint(users_bp, url_prefix="/api/v1/users")
     app.register_blueprint(roles_bp, url_prefix="/api/v1/roles")
     app.register_blueprint(audit_bp, url_prefix="/api/v1/audit")
-    app.register_blueprint(divisions_bp, url_prefix="/api/v1/divisions")
     app.register_blueprint(landlords_bp, url_prefix="/api/v1/landlords")
+    app.register_blueprint(clients_bp, url_prefix="/api/v1/clients")
+    app.register_blueprint(contracts_bp, url_prefix="/api/v1/contracts")
+    app.register_blueprint(rent_bp, url_prefix="/api/v1/rent")
+    app.register_blueprint(expenses_bp, url_prefix="/api/v1/expenses")
     app.register_blueprint(properties_bp, url_prefix="/api/v1/properties")
+    app.register_blueprint(landlord_contracts_bp, url_prefix="/api/v1/landlord-contracts")
+    app.register_blueprint(agreements_bp, url_prefix="/api/v1")
     app.register_blueprint(attachments_bp, url_prefix="/api/v1/attachments")
     app.register_blueprint(floors_bp, url_prefix="/api/v1")
-    app.register_blueprint(rooms_bp, url_prefix="/api/v1")
-    app.register_blueprint(beds_bp, url_prefix="/api/v1")
-    app.register_blueprint(employees_bp, url_prefix="/api/v1/employees")
-    app.register_blueprint(assignments_bp, url_prefix="/api/v1")
-    app.register_blueprint(movements_bp, url_prefix="/api/v1")
+    app.register_blueprint(units_bp, url_prefix="/api/v1")
     app.register_blueprint(renewals_bp, url_prefix="/api/v1")
     app.register_blueprint(maintenance_bp, url_prefix="/api/v1")
-    app.register_blueprint(bulk_bp, url_prefix="/api/v1")
     app.register_blueprint(search_bp, url_prefix="/api/v1")
     app.register_blueprint(notifications_bp, url_prefix="/api/v1/notifications")
     app.register_blueprint(events_bp, url_prefix="/api/v1/events")
@@ -132,6 +134,8 @@ def create_app(config_name: str | None = None) -> APIFlask:
     app.register_blueprint(approvals_bp, url_prefix="/api/v1/approvals")
     app.register_blueprint(settings_bp, url_prefix="/api/v1/settings")
     app.register_blueprint(backup_bp, url_prefix="/api/v1/backups")
+    app.register_blueprint(messaging_bp, url_prefix="/api/v1/messaging")
+    app.register_blueprint(migration_bp, url_prefix="/api/v1/migration")
 
     # Celery (Phase 5). Initialized after blueprints so task imports
     # see the fully-configured app.
@@ -152,7 +156,7 @@ def create_app(config_name: str | None = None) -> APIFlask:
 
     @app.route("/")
     def index():
-        return jsonify({"service": "PUG Accommodation Management API", "status": "ok"})
+        return jsonify({"service": "GreenTech Real Estate API", "status": "ok"})
 
     return app
 

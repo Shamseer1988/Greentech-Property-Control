@@ -2,24 +2,6 @@ import io
 from datetime import date, timedelta
 
 
-def test_division_crud(client, auth_headers):
-    resp = client.post(
-        "/api/v1/divisions",
-        headers=auth_headers,
-        json={"name": "PUG Retail", "company_name": "Paris United Group", "division_type": "retail"},
-    )
-    assert resp.status_code == 201, resp.get_data(as_text=True)
-    div = resp.get_json()["data"]
-    assert div["code"].startswith("DIV-")
-
-    listed = client.get("/api/v1/divisions", headers=auth_headers).get_json()
-    assert listed["meta"]["count"] >= 1
-
-    upd = client.put(f"/api/v1/divisions/{div['id']}", headers=auth_headers, json={"manager": "Ahmed"})
-    assert upd.status_code == 200
-    assert upd.get_json()["data"]["manager"] == "Ahmed"
-
-
 def test_landlord_create(client, auth_headers):
     resp = client.post(
         "/api/v1/landlords",
@@ -128,7 +110,7 @@ def test_attachment_upload_and_download(client, auth_headers):
     prop = client.post(
         "/api/v1/properties",
         headers=auth_headers,
-        json={"name": "Attach P", "property_type": "apartment"},
+        json={"name": "Attach P", "property_type": "flat_building"},
     ).get_json()["data"]
     client.post(
         f"/api/v1/properties/{prop['id']}/agreements",
@@ -207,16 +189,11 @@ def test_status_change_blocked_by_occupancy(client, auth_headers):
     prop, _ = _make_property(client, auth_headers)
     floor = client.post(f"/api/v1/properties/{prop['id']}/floors", headers=auth_headers,
                         json={"floor_number": "1"}).get_json()["data"]
-    room = client.post(f"/api/v1/floors/{floor['id']}/rooms", headers=auth_headers,
-                       json={"room_number": "101", "capacity": 1}).get_json()["data"]
-    bed = client.post(f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-                      json={"bed_number": "1"}).get_json()["data"]
-    div = client.post("/api/v1/divisions", headers=auth_headers,
-                      json={"name": "Status Test"}).get_json()["data"]
-    emp = client.post("/api/v1/employees", headers=auth_headers,
-                      json={"full_name": "Inhabitant", "division_id": div["id"]}).get_json()["data"]
-    client.post("/api/v1/assignments", headers=auth_headers,
-                json={"employee_id": emp["id"], "bed_id": bed["id"]})
+    unit = client.post(f"/api/v1/floors/{floor['id']}/units", headers=auth_headers,
+                       json={"unit_number": "101"}).get_json()["data"]
+    occ = client.post(f"/api/v1/units/{unit['id']}/status", headers=auth_headers,
+                      json={"status": "occupied"})
+    assert occ.status_code == 200, occ.get_data(as_text=True)
 
     r = client.post(f"/api/v1/properties/{prop['id']}/status", headers=auth_headers,
                     json={"status": "inactive", "reason": "shutting down"})
@@ -224,7 +201,7 @@ def test_status_change_blocked_by_occupancy(client, auth_headers):
     body = r.get_json()
     assert body["details"]["blocked"] is True
     assert body["details"]["occupied"] == 1
-    assert any(s["employee_name"] == "Inhabitant" for s in body["details"]["sample_employees"])
+    assert any(u["unit_number"] == "101" for u in body["details"]["sample_units"])
 
 
 def test_put_status_now_rejected(client, auth_headers):
@@ -233,3 +210,65 @@ def test_put_status_now_rejected(client, auth_headers):
                    json={"status": "on_hold"})
     assert r.status_code == 400
     assert "/status" in r.get_json()["message"]
+
+
+# --------------------------------------------------------- property types
+
+def test_property_type_seeded_and_usable(client, auth_headers):
+    seeded = client.get("/api/v1/properties/types", headers=auth_headers).get_json()["data"]
+    codes = {t["code"] for t in seeded}
+    assert {"full_building", "villa", "store", "compound"} <= codes
+    assert all(t["is_active"] for t in seeded)
+
+
+def test_property_type_create_deactivate_and_reject_unknown(client, auth_headers):
+    created = client.post("/api/v1/properties/types", headers=auth_headers,
+                          json={"name": "Warehouse"})
+    assert created.status_code == 201, created.get_data(as_text=True)
+    ptype = created.get_json()["data"]
+    assert ptype["code"] == "WAREHOUSE"
+
+    dup = client.post("/api/v1/properties/types", headers=auth_headers,
+                      json={"name": "warehouse"})
+    assert dup.status_code == 409
+
+    prop = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Cold Store", "property_type": "WAREHOUSE"})
+    assert prop.status_code == 201, prop.get_data(as_text=True)
+
+    off = client.patch(f"/api/v1/properties/types/{ptype['id']}", headers=auth_headers,
+                       json={"is_active": False})
+    assert off.status_code == 200
+    assert off.get_json()["data"]["is_active"] is False
+
+    active_only = client.get("/api/v1/properties/types?active_only=1",
+                             headers=auth_headers).get_json()["data"]
+    assert "WAREHOUSE" not in {t["code"] for t in active_only}
+
+    blocked = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Another Cold Store", "property_type": "WAREHOUSE"})
+    assert blocked.status_code == 400
+
+
+def test_deactivated_property_type_stays_valid_on_its_own_property(client, auth_headers):
+    """Deactivating a type must not strand the properties that already
+    carry it — an edit that doesn't touch the type should keep saving."""
+    created = client.post("/api/v1/properties/types", headers=auth_headers,
+                          json={"name": "Legacy Type"}).get_json()["data"]
+    prop = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Old School", "property_type": created["code"]}).get_json()["data"]
+
+    client.patch(f"/api/v1/properties/types/{created['id']}", headers=auth_headers,
+                json={"is_active": False})
+
+    unchanged = client.put(f"/api/v1/properties/{prop['id']}", headers=auth_headers,
+                           json={"remarks": "still fine", "property_type": created["code"]})
+    assert unchanged.status_code == 200, unchanged.get_data(as_text=True)
+
+    switch_away = client.put(f"/api/v1/properties/{prop['id']}", headers=auth_headers,
+                             json={"property_type": "villa"})
+    assert switch_away.status_code == 200
+
+    switch_back = client.put(f"/api/v1/properties/{prop['id']}", headers=auth_headers,
+                             json={"property_type": created["code"]})
+    assert switch_back.status_code == 400

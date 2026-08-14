@@ -1,74 +1,39 @@
+"""Dashboard aggregations.
+
+`summary()` is the main dashboard's single call: the estate (properties,
+units, landlords), the money (collections, ageing, month P&L), and what
+needs attention (expiring contracts and documents, cheques due and
+bounced, approvals waiting).
+
+Every figure here is read from the same services the pages and reports
+use — `collections_summary`, `ageing`, `property_pnl` and friends — so a
+number on the dashboard cannot disagree with the same number on its
+report. Nothing is computed twice.
+"""
 from datetime import date, datetime, timedelta
-from sqlalchemy import func, case
+
+from sqlalchemy import func
 
 from ..extensions import db
 from ..models import (
-    Property, Floor, Room, Bed, Employee, Landlord, PropertyAgreement, MaintenanceRecord,
-    AccommodationAssignment, AccommodationTransfer, AccommodationCancellation,
-    EmployeeVacation, LandlordRenewal,
+    Property, Unit, Landlord, PropertyAgreement, MaintenanceRecord,
+    AuditLog, User, ClientContract, Client, Cheque, Receipt,
 )
-from .reminders import agreement_bucket, reminder_summary
+from .reminders import reminder_summary, expiring_agreements
+from .approvals import pending_counts
+from .documents import expiring_documents
+from .rent import month_start, add_months
+from .receipts import collections_summary
+from .ageing import ageing
+from .expenses import property_pnl, landlord_statement
+from . import cheques as cheque_service
+from .cache import cache_get, cache_set
 
-
-def _bed_counts() -> dict:
-    rows = (
-        db.session.query(Bed.status, func.count(Bed.id))
-        .group_by(Bed.status)
-        .all()
-    )
-    counts = {"total": 0, "empty": 0, "occupied": 0, "reserved": 0, "maintenance": 0, "blocked": 0}
-    for status, n in rows:
-        counts[status] = counts.get(status, 0) + n
-        counts["total"] += n
-    counts["occupancy_percent"] = (
-        round(counts["occupied"] * 100.0 / counts["total"], 1) if counts["total"] else 0.0
-    )
-    return counts
-
-
-def _room_counts() -> dict:
-    rows = (
-        db.session.query(Room.occupancy_status, func.count(Room.id))
-        .group_by(Room.occupancy_status)
-        .all()
-    )
-    counts = {"total": 0, "empty": 0, "partially_occupied": 0, "full": 0, "maintenance": 0, "blocked": 0}
-    for status, n in rows:
-        counts[status] = counts.get(status, 0) + n
-        counts["total"] += n
-    return counts
-
-
-def _employee_counts() -> dict:
-    rows = (
-        db.session.query(Employee.status, func.count(Employee.id))
-        .group_by(Employee.status)
-        .all()
-    )
-    by_status = {"active": 0, "on_vacation": 0, "transferred": 0, "visa_cancelled": 0,
-                 "resigned": 0, "terminated": 0}
-    total = 0
-    for status, n in rows:
-        by_status[status] = by_status.get(status, 0) + n
-        total += n
-    assigned = (
-        db.session.query(func.count(Employee.id))
-        .filter(Employee.current_bed_id.isnot(None))
-        .scalar() or 0
-    )
-    needs = (
-        db.session.query(func.count(Employee.id))
-        .filter(Employee.accommodation_required.is_(True))
-        .filter(Employee.status.in_(("active", "on_vacation")))
-        .scalar() or 0
-    )
-    return {
-        "total": total,
-        "by_status": by_status,
-        "assigned": assigned,
-        "not_assigned_needing": max(needs - assigned, 0),
-        "on_vacation": by_status.get("on_vacation", 0),
-    }
+# The dashboard's aggregate queries (P&L trend alone runs property_pnl()
+# 12 times per request) are expensive enough, and tolerant enough of a
+# few seconds' staleness, that a short cache is a clear win — this is
+# the single most-hit read in the app.
+_CACHE_TTL = 60
 
 
 def _property_counts() -> dict:
@@ -81,308 +46,566 @@ def _property_counts() -> dict:
     for status, n in rows:
         counts[status] = counts.get(status, 0) + n
         counts["total"] += n
-    counts["floors"] = db.session.query(func.count(Floor.id)).scalar() or 0
-    counts["agreements_active"] = (
-        db.session.query(func.count(PropertyAgreement.id))
-        .filter(PropertyAgreement.is_active.is_(True))
-        .scalar() or 0
-    )
     return counts
 
 
-def _maintenance_counts() -> dict:
+def _unit_counts() -> dict:
     rows = (
-        db.session.query(MaintenanceRecord.status, func.count(MaintenanceRecord.id))
-        .group_by(MaintenanceRecord.status)
+        db.session.query(Unit.occupancy_status, func.count(Unit.id))
+        .group_by(Unit.occupancy_status)
         .all()
     )
-    counts = {"in_progress": 0, "completed": 0, "cancelled": 0}
+    counts = {"total": 0, "empty": 0, "occupied": 0, "maintenance": 0, "blocked": 0}
     for status, n in rows:
         counts[status] = counts.get(status, 0) + n
+        counts["total"] += n
+    counts["occupancy_percent"] = (
+        round(counts["occupied"] * 100.0 / counts["total"], 1) if counts["total"] else 0.0
+    )
     return counts
 
 
-def summary() -> dict:
+def contract_expiry(today: date | None = None) -> dict:
+    """Active client contracts bucketed by how soon they run out.
+
+    Buckets are cumulative-free — a contract lands in exactly one — so
+    the four numbers add up to the count of contracts expiring within 90
+    days plus those already past their date.
+    """
+    today = today or date.today()
+    rows = (
+        db.session.query(ClientContract, Client)
+        .join(Client, ClientContract.client_id == Client.id)
+        .filter(ClientContract.status == "active")
+        .filter(ClientContract.expiry_date <= today + timedelta(days=90))
+        .order_by(ClientContract.expiry_date)
+        .all()
+    )
+    buckets = {"expired": 0, "d30": 0, "d60": 0, "d90": 0}
+    soonest = []
+    for contract, client in rows:
+        days = (contract.expiry_date - today).days
+        if days < 0:
+            key = "expired"
+        elif days <= 30:
+            key = "d30"
+        elif days <= 60:
+            key = "d60"
+        else:
+            key = "d90"
+        buckets[key] += 1
+        if len(soonest) < 10:
+            soonest.append({
+                "contract_id": contract.id,
+                "contract_number": contract.contract_number,
+                "client_name": client.name,
+                "expiry_date": contract.expiry_date.isoformat(),
+                "days_left": days,
+                "monthly_rent": float(contract.monthly_rent),
+                "bucket": key,
+            })
+    buckets["total"] = sum(v for k, v in buckets.items() if k != "total")
+    return {"buckets": buckets, "soonest": soonest}
+
+
+def cheque_watch(today: date | None = None) -> dict:
+    """PDCs to bank this week, and the ones that came back."""
+    today = today or date.today()
+    due = cheque_service.due_for_deposit(within_days=7, today=today)
+    bounced = cheque_service.bounced(today=today)
     return {
-        "properties": _property_counts(),
-        "rooms": _room_counts(),
-        "beds": _bed_counts(),
-        "employees": _employee_counts(),
-        "agreements": {"expiry_buckets": reminder_summary()},
-        "maintenance": _maintenance_counts(),
-        "generated_at": datetime.utcnow().isoformat(),
+        "due_this_week": {
+            "count": len(due),
+            "amount": round(sum(float(c.amount) for c in due), 2),
+            "cheques": [c.to_dict() for c in due[:10]],
+        },
+        "bounced": {
+            "count": len(bounced),
+            "amount": round(sum(float(c.amount) for c in bounced), 2),
+            "cheques": [c.to_dict() for c in bounced[:10]],
+        },
     }
 
 
-def occupancy_by_property(limit: int = 20) -> list[dict]:
-    """Per-property bed totals + occupied count, ordered by total desc."""
+def summary(month: date | None = None) -> dict:
+    period = month_start(month or date.today())
+    cache_key = f"dashboard:summary:{period.isoformat()}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    landlords = db.session.query(func.count(Landlord.id)).scalar() or 0
+    clients = db.session.query(func.count(Client.id)).scalar() or 0
+    active_contracts = (
+        db.session.query(func.count(ClientContract.id))
+        .filter(ClientContract.status == "active")
+        .scalar() or 0
+    )
+    open_maintenance = (
+        db.session.query(func.count(MaintenanceRecord.id))
+        .filter(MaintenanceRecord.status == "in_progress")
+        .scalar() or 0
+    )
+
+    aged = ageing(upto=period)
+    pnl = property_pnl(period_month=period)
+
+    result = {
+        "month": period.isoformat(),
+        "properties": _property_counts(),
+        "units": _unit_counts(),
+        "landlords": {"total": int(landlords)},
+        "clients": {"total": int(clients)},
+        "contracts": {"active": int(active_contracts)},
+        "collections": collections_summary(month=period),
+        "ageing": {
+            "total_outstanding": aged["grand_total"],
+            "clients_in_arrears": len(aged["rows"]),
+            "worst": aged["rows"][:5],
+        },
+        "pnl": pnl["totals"],
+        "contract_expiry": contract_expiry(),
+        "agreement_expiry": reminder_summary(),
+        "cheques": cheque_watch(),
+        "open_maintenance": int(open_maintenance),
+        "approvals": pending_counts(),
+    }
+    cache_set(cache_key, result, _CACHE_TTL)
+    return result
+
+
+def recent_activity(limit: int = 15) -> list[dict]:
     rows = (
-        db.session.query(
-            Property.id, Property.code, Property.name,
-            func.count(Bed.id).label("total"),
-            func.sum(case((Bed.status == "occupied", 1), else_=0)).label("occupied"),
-            func.sum(case((Bed.status == "empty", 1), else_=0)).label("empty"),
-            func.sum(case((Bed.status == "reserved", 1), else_=0)).label("reserved"),
-            func.sum(case((Bed.status == "maintenance", 1), else_=0)).label("maintenance"),
-        )
-        .outerjoin(Bed, Bed.property_id == Property.id)
-        .group_by(Property.id, Property.code, Property.name)
-        .order_by(func.count(Bed.id).desc())
+        db.session.query(AuditLog, User.username)
+        .outerjoin(User, AuditLog.user_id == User.id)
+        .order_by(AuditLog.id.desc())
         .limit(limit)
         .all()
     )
     out = []
-    for r in rows:
-        total = int(r.total or 0)
-        occ = int(r.occupied or 0)
-        out.append({
-            "property_id": r.id,
-            "code": r.code,
-            "name": r.name,
-            "total": total,
-            "occupied": occ,
-            "empty": int(r.empty or 0),
-            "reserved": int(r.reserved or 0),
-            "maintenance": int(r.maintenance or 0),
-            "occupancy_percent": round(occ * 100.0 / total, 1) if total else 0.0,
-        })
+    for log, username in rows:
+        d = log.to_dict()
+        d["username"] = username
+        out.append(d)
     return out
 
 
-def occupancy_by_division() -> list[dict]:
-    """Active employees per division grouped by assigned vs not assigned."""
-    rows = (
-        db.session.query(
-            Employee.division_id,
-            func.count(Employee.id).label("total"),
-            func.sum(case((Employee.current_bed_id.isnot(None), 1), else_=0)).label("assigned"),
-        )
-        .filter(Employee.accommodation_required.is_(True))
-        .group_by(Employee.division_id)
-        .all()
-    )
-    from ..models import Division
-    div_index = {d.id: d for d in Division.query.all()}
-    out = []
-    for r in rows:
-        d = div_index.get(r.division_id)
-        out.append({
-            "division_id": r.division_id,
-            "division_code": d.code if d else None,
-            "division_name": d.name if d else "Unassigned",
-            "total": int(r.total or 0),
-            "assigned": int(r.assigned or 0),
-            "not_assigned": int((r.total or 0) - (r.assigned or 0)),
-        })
-    out.sort(key=lambda x: x["total"], reverse=True)
-    return out
-
-
-def monthly_movement(months: int = 6) -> list[dict]:
-    """Per-month counts of assignments, transfers, cancellations, vacations.
-
-    Returns `months` rows ending at the current month.
-    """
-    today = date.today()
-    year, month = today.year, today.month
-    keys: list[date] = []
-    # Walk backwards `months - 1` steps from this month
-    for offset in range(months - 1, -1, -1):
-        m = month - offset
-        y = year
-        while m <= 0:
-            m += 12
-            y -= 1
-        keys.append(date(y, m, 1))
-    first_of_window = keys[0]
-
-    def _by_month(model, date_col):
-        rows = (
-            db.session.query(
-                func.strftime("%Y-%m", date_col).label("ym"),
-                func.count(model.id),
-            )
-            .filter(date_col >= first_of_window)
-            .group_by("ym")
-            .all()
-        )
-        return {ym: n for ym, n in rows}
-
-    # Aggregate in Python — works identically on SQLite, Postgres, MySQL,
-    # never depends on dialect-specific date functions, and never leaves
-    # the session in an aborted state if a query fails.
-    def _by_month(model, date_col):
-        rows = (
-            db.session.query(date_col)
-            .filter(date_col.isnot(None))
-            .filter(date_col >= first_of_window)
-            .all()
-        )
-        counts: dict[str, int] = {}
-        for (d,) in rows:
-            if d is None:
-                continue
-            key = d.strftime("%Y-%m")
-            counts[key] = counts.get(key, 0) + 1
-        return counts
-
-    ass = _by_month(AccommodationAssignment, AccommodationAssignment.assignment_date)
-    trn = _by_month(AccommodationTransfer, AccommodationTransfer.transfer_date)
-    canc = _by_month(AccommodationCancellation, AccommodationCancellation.cancellation_date)
-    vac = _by_month(EmployeeVacation, EmployeeVacation.vacation_start_date)
-
-    out = []
-    for d in keys:
-        key = d.strftime("%Y-%m")
-        out.append({
-            "month": key,
-            "assignments": int(ass.get(key, 0)),
-            "transfers": int(trn.get(key, 0)),
-            "cancellations": int(canc.get(key, 0)),
-            "vacations": int(vac.get(key, 0)),
-        })
-    return out
-
-
-def _label(typ: str, model, instance) -> dict:
-    base = {
-        "type": typ,
-        "id": instance.id,
-        "transaction_number": getattr(instance, "transaction_number", None),
-        "created_at": instance.created_at.isoformat() if instance.created_at else None,
+def _agreement_alert(a: PropertyAgreement, today: date) -> dict:
+    return {
+        "agreement_id": a.id,
+        "property_id": a.property_id,
+        "property_name": a.property.name if a.property else None,
+        "landlord_name": a.landlord.name if a.landlord else None,
+        "expiry_date": a.expiry_date.isoformat(),
+        "days_left": (a.expiry_date - today).days,
+        "bucket": "expired" if a.expiry_date < today else str((a.expiry_date - today).days),
     }
-    if hasattr(instance, "employee") and instance.employee is not None:
-        base["employee"] = {"id": instance.employee.id, "full_name": instance.employee.full_name}
-    if hasattr(instance, "property") and instance.property is not None:
-        base["property"] = {"id": instance.property.id, "name": instance.property.name}
-    return base
-
-
-def recent_activity(limit: int = 15) -> list[dict]:
-    items = []
-    for a in AccommodationAssignment.query.order_by(AccommodationAssignment.id.desc()).limit(limit).all():
-        d = _label("assignment", AccommodationAssignment, a)
-        d["bed_code"] = a.bed.bed_code if a.bed else None
-        d["status"] = a.status
-        items.append(d)
-    for t in AccommodationTransfer.query.order_by(AccommodationTransfer.id.desc()).limit(limit).all():
-        d = _label("transfer", AccommodationTransfer, t)
-        d["from_bed_code"] = t.from_bed.bed_code if t.from_bed else None
-        d["to_bed_code"] = t.to_bed.bed_code if t.to_bed else None
-        items.append(d)
-    for c in AccommodationCancellation.query.order_by(AccommodationCancellation.id.desc()).limit(limit).all():
-        d = _label("cancellation", AccommodationCancellation, c)
-        d["reason"] = c.reason
-        items.append(d)
-    for v in EmployeeVacation.query.order_by(EmployeeVacation.id.desc()).limit(limit).all():
-        d = _label("vacation", EmployeeVacation, v)
-        d["status"] = v.status
-        d["keep_bed_reserved"] = v.keep_bed_reserved
-        items.append(d)
-    for r in LandlordRenewal.query.order_by(LandlordRenewal.id.desc()).limit(limit).all():
-        d = _label("renewal", LandlordRenewal, r)
-        items.append(d)
-    for m in MaintenanceRecord.query.order_by(MaintenanceRecord.id.desc()).limit(limit).all():
-        d = _label("maintenance", MaintenanceRecord, m)
-        d["entity_type"] = m.entity_type
-        d["status"] = m.status
-        items.append(d)
-
-    items.sort(key=lambda x: x["created_at"] or "", reverse=True)
-    return items[:limit]
 
 
 def alerts() -> dict:
-    """Group alerts by severity for the alert center / notification bell."""
+    """Tiered alert-center payload for the Alerts page and bell.
+
+    Rent-due / cheque-bounce tiers join in Phases 3+."""
     today = date.today()
-    active_agreements = (
-        PropertyAgreement.query
-        .filter(PropertyAgreement.is_active.is_(True))
-        .all()
-    )
-    expired = []
-    soon_7 = []
-    soon_30 = []
-    soon_90 = []
-    for ag in active_agreements:
-        bucket = agreement_bucket(ag.expiry_date, today)
-        days_left = (ag.expiry_date - today).days
-        prop = ag.property
-        entry = {
-            "agreement_id": ag.id,
-            "landlord_id": ag.landlord_id,
-            "landlord_name": ag.landlord.name if ag.landlord else None,
-            "property_id": prop.id if prop else None,
-            "property_name": prop.name if prop else None,
-            "expiry_date": ag.expiry_date.isoformat(),
-            "days_left": days_left,
-            "bucket": bucket,
+    rows = expiring_agreements(within_days=90, today=today)
+    expired, within_7, within_30, within_90 = [], [], [], []
+    for a in rows:
+        d = _agreement_alert(a, today)
+        days = d["days_left"]
+        if days < 0:
+            expired.append(d)
+        elif days <= 7:
+            within_7.append(d)
+        elif days <= 30:
+            within_30.append(d)
+        else:
+            within_90.append(d)
+
+    maintenance = [
+        {
+            "id": m.id,
+            "transaction_number": m.transaction_number,
+            "entity_type": m.entity_type,
+            "entity_id": m.entity_id,
+            "start_date": m.start_date.isoformat() if m.start_date else None,
+            "expected_end_date": m.expected_end_date.isoformat() if m.expected_end_date else None,
+            "reason": m.reason,
         }
-        if bucket == "expired":
-            expired.append(entry)
-        elif bucket == "7":
-            soon_7.append(entry)
-        elif bucket in ("15", "30"):
-            soon_30.append(entry)
-        elif bucket in ("60", "90"):
-            soon_90.append(entry)
+        for m in MaintenanceRecord.query.filter_by(status="in_progress")
+        .order_by(MaintenanceRecord.id.desc()).limit(50).all()
+    ]
 
-    over_capacity = []
-    for r in Room.query.all():
-        beds = r.beds or []
-        if len(beds) > (r.capacity or 0):
-            over_capacity.append({
-                "room_id": r.id, "property_id": r.property_id,
-                "room_number": r.room_number, "bed_count": len(beds), "capacity": r.capacity,
-            })
+    # Document expiry (CR / QID) splits across the same tiers.
+    docs = expiring_documents(within_days=90, today=today)
+    docs_expired = [d for d in docs if d["days_left"] < 0]
+    docs_soon = [d for d in docs if 0 <= d["days_left"] <= 30]
+    docs_later = [d for d in docs if d["days_left"] > 30]
 
-    unassigned_employees = (
-        Employee.query
-        .filter(Employee.accommodation_required.is_(True))
-        .filter(Employee.current_bed_id.is_(None))
-        .filter(Employee.status.in_(("active", "on_vacation")))
-        .order_by(Employee.full_name.asc())
-        .limit(50)
+    critical = {
+        "expired_agreements": expired,
+        "expiring_within_7_days": within_7,
+        "expired_documents": docs_expired,
+    }
+    warning = {
+        "expiring_within_30_days": within_30,
+        "documents_expiring_within_30_days": docs_soon,
+    }
+    info = {
+        "expiring_within_90_days": within_90,
+        "documents_expiring_within_90_days": docs_later,
+        "maintenance_in_progress": maintenance,
+    }
+    return {
+        "critical": critical,
+        "warning": warning,
+        "info": info,
+        "counts": {
+            "critical": sum(len(v) for v in critical.values()),
+            "warning": sum(len(v) for v in warning.values()),
+            "info": sum(len(v) for v in info.values()),
+        },
+        "approvals": pending_counts(),
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def occupancy_by_property(limit: int = 20) -> list[dict]:
+    # Short TTL, deliberately much shorter than _CACHE_TTL — this chart is
+    # wired to the occupancy SSE channel on the frontend
+    # (useEvents("occupancy", ...) invalidates it the instant a unit's
+    # status changes), so a long cache would visibly fight that real-time
+    # update instead of just adding ordinary staleness.
+    cache_key = f"dashboard:occupancy-by-property:{limit}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    rows = (
+        db.session.query(
+            Property.id, Property.code, Property.name,
+            func.count(Unit.id).label("total"),
+            func.sum(func.cast(Unit.occupancy_status == "occupied", db.Integer)).label("occupied"),
+        )
+        .outerjoin(Unit, Unit.property_id == Property.id)
+        .filter(Property.status == "active")
+        .group_by(Property.id, Property.code, Property.name)
+        .order_by(func.count(Unit.id).desc())
+        .limit(limit)
         .all()
     )
+    out = []
+    for pid, code, name, total, occupied in rows:
+        total = int(total or 0)
+        occupied = int(occupied or 0)
+        out.append({
+            "property_id": pid,
+            "code": code,
+            "name": name,
+            "total_units": total,
+            "occupied": occupied,
+            "empty": total - occupied,
+            "occupancy_percent": round(occupied * 100.0 / total, 1) if total else 0.0,
+        })
+    cache_set(cache_key, out, 10)
+    return out
 
-    maintenance_active = (
-        MaintenanceRecord.query
-        .filter_by(status="in_progress")
-        .order_by(MaintenanceRecord.start_date.desc())
-        .limit(50)
+
+# ======================================================================
+# Entity dashboards
+# ======================================================================
+
+def _pnl_trend(property_id: int, upto: date, months: int = 12) -> list[dict]:
+    """Month-by-month margin for one property — the workbook's row of
+    monthly Profit-Or-Loss figures, as a series."""
+    out = []
+    for offset in range(months - 1, -1, -1):
+        period = add_months(upto, -offset)
+        result = property_pnl(period_month=period, property_id=property_id)
+        row = result["rows"][0] if result["rows"] else {}
+        out.append({
+            "month": period.isoformat(),
+            "rent_charged": row.get("rent_charged", 0.0),
+            "rent_collected": row.get("rent_collected", 0.0),
+            "rent_paid": row.get("rent_paid", 0.0),
+            "expense_total": row.get("expense_total", 0.0),
+            "profit": row.get("profit", 0.0),
+        })
+    return out
+
+
+def property_dashboard(property_id: int, month: date | None = None) -> dict:
+    """Everything about one property on a single screen — the New-2026
+    block for that building, plus its structure and who is in it."""
+    prop = Property.query.get(property_id)
+    if prop is None:
+        raise ValueError("property_id not found")
+    period = month_start(month or date.today())
+
+    units = Unit.query.filter_by(property_id=property_id).all()
+    by_status: dict[str, int] = {}
+    for unit in units:
+        by_status[unit.occupancy_status] = by_status.get(unit.occupancy_status, 0) + 1
+    occupied = by_status.get("occupied", 0)
+
+    contracts = (
+        db.session.query(ClientContract, Client)
+        .join(Client, ClientContract.client_id == Client.id)
+        .filter(ClientContract.property_id == property_id)
+        .filter(ClientContract.status == "active")
+        .order_by(ClientContract.contract_number)
         .all()
+    )
+    today = date.today()
+    contract_rows = []
+    for contract, client in contracts:
+        held = contract.active_allocations(max(today, contract.start_date))
+        contract_rows.append({
+            "contract_id": contract.id,
+            "contract_number": contract.contract_number,
+            "client_id": client.id,
+            "client_name": client.name,
+            "payment_mode": contract.payment_mode,
+            "monthly_rent": float(contract.monthly_rent),
+            "expiry_date": contract.expiry_date.isoformat(),
+            "days_left": (contract.expiry_date - today).days,
+            "units": [a.unit.unit_number for a in held if a.unit],
+        })
+
+    pnl = property_pnl(period_month=period, property_id=property_id)
+    agreement = (
+        PropertyAgreement.query
+        .filter_by(property_id=property_id, is_active=True)
+        .first()
     )
 
     return {
-        "critical": {
-            "expired_agreements": expired,
-            "expiring_within_7_days": soon_7,
-            "over_capacity_rooms": over_capacity,
+        "property": prop.to_dict(),
+        "landlord": prop.landlord.to_dict() if prop.landlord else None,
+        "agreement": agreement.to_dict() if agreement else None,
+        "units": {
+            "total": len(units),
+            "occupied": occupied,
+            "empty": by_status.get("empty", 0),
+            "by_status": by_status,
+            "occupancy_percent": round(occupied * 100.0 / len(units), 1) if units else 0.0,
         },
-        "warning": {
-            "expiring_within_30_days": soon_30,
-            "unassigned_employees": [
-                {"id": e.id, "code": e.code, "full_name": e.full_name,
-                 "division": e.division.name if e.division else None}
-                for e in unassigned_employees
-            ],
-        },
-        "info": {
-            "expiring_within_90_days": soon_90,
-            "maintenance_in_progress": [
-                {"id": m.id, "transaction_number": m.transaction_number,
-                 "entity_type": m.entity_type, "entity_id": m.entity_id,
-                 "start_date": m.start_date.isoformat() if m.start_date else None,
-                 "expected_end_date": m.expected_end_date.isoformat() if m.expected_end_date else None,
-                 "reason": m.reason}
-                for m in maintenance_active
-            ],
-        },
-        "counts": {
-            "critical": len(expired) + len(soon_7) + len(over_capacity),
-            "warning": len(soon_30) + len(unassigned_employees),
-            "info": len(soon_90) + len(maintenance_active),
-        },
-        "generated_at": datetime.utcnow().isoformat(),
+        "contracts": contract_rows,
+        "month": period.isoformat(),
+        "pnl": pnl["rows"][0] if pnl["rows"] else None,
+        "trend": _pnl_trend(property_id, period),
+    }
+
+
+def client_dashboard(client_id: int, month: date | None = None) -> dict:
+    """One tenant: what they hold, what they owe, and how it aged."""
+    client = Client.query.get(client_id)
+    if client is None:
+        raise ValueError("client_id not found")
+    period = month_start(month or date.today())
+
+    contracts = (
+        db.session.query(ClientContract, Property)
+        .join(Property, ClientContract.property_id == Property.id)
+        .filter(ClientContract.client_id == client_id)
+        .order_by(ClientContract.start_date.desc())
+        .all()
+    )
+    today = date.today()
+    rows = []
+    for contract, prop in contracts:
+        held = contract.active_allocations(max(today, contract.start_date))
+        rows.append({
+            "contract_id": contract.id,
+            "contract_number": contract.contract_number,
+            "property_id": prop.id,
+            "property_name": prop.name,
+            "status": contract.status,
+            "payment_mode": contract.payment_mode,
+            "monthly_rent": float(contract.monthly_rent),
+            "start_date": contract.start_date.isoformat(),
+            "expiry_date": contract.expiry_date.isoformat(),
+            "days_left": (contract.expiry_date - today).days,
+            "units": [a.unit.unit_number for a in held if a.unit],
+        })
+
+    aged = ageing(upto=period)
+    mine = next((r for r in aged["rows"] if r["client_id"] == client_id), None)
+
+    receipts = (
+        Receipt.query
+        .filter_by(client_id=client_id, status="posted")
+        .order_by(Receipt.receipt_date.desc(), Receipt.id.desc())
+        .limit(10).all()
+    )
+    # "On hand" means still ours to bank or chase: held, with the bank,
+    # or returned unpaid. Cleared, replaced and returned cheques are
+    # closed and would only pad the list.
+    cheques = (
+        db.session.query(Cheque)
+        .join(ClientContract, Cheque.contract_id == ClientContract.id)
+        .filter(ClientContract.client_id == client_id)
+        .filter(Cheque.status.in_(("received", "deposited", "bounced")))
+        .order_by(Cheque.cheque_date)
+        .limit(20).all()
+    )
+
+    return {
+        "client": client.to_dict(),
+        "contracts": rows,
+        "active_contracts": sum(1 for r in rows if r["status"] == "active"),
+        "outstanding": mine["total"] if mine else 0.0,
+        "ageing": mine,
+        "recent_receipts": [r.to_dict() for r in receipts],
+        "cheques": [c.to_dict() for c in cheques],
+        "month": period.isoformat(),
+    }
+
+
+def landlord_dashboard(landlord_id: int, month: date | None = None) -> dict:
+    """One owner: their buildings, what we agreed, and what we paid."""
+    landlord = Landlord.query.get(landlord_id)
+    if landlord is None:
+        raise ValueError("landlord_id not found")
+    period = month_start(month or date.today())
+    today = date.today()
+
+    properties = Property.query.filter_by(landlord_id=landlord_id).order_by(
+        Property.name).all()
+    agreements = (
+        db.session.query(PropertyAgreement, Property)
+        .join(Property, PropertyAgreement.property_id == Property.id)
+        .filter(PropertyAgreement.landlord_id == landlord_id)
+        .filter(PropertyAgreement.is_active.is_(True))
+        .order_by(PropertyAgreement.expiry_date)
+        .all()
+    )
+    agreement_rows = [{
+        "agreement_id": a.id,
+        "property_id": p.id,
+        "property_name": p.name,
+        "agreement_number": a.agreement_number,
+        "start_date": a.start_date.isoformat(),
+        "expiry_date": a.expiry_date.isoformat(),
+        "days_left": (a.expiry_date - today).days,
+        "monthly_rent": float(a.monthly_rent) if a.monthly_rent is not None else None,
+        "security_deposit": float(a.security_deposit) if a.security_deposit is not None else None,
+        "renewal_status": a.renewal_status,
+    } for a, p in agreements]
+
+    statement = landlord_statement(landlord_id)
+    committed = sum(r["monthly_rent"] or 0 for r in agreement_rows)
+
+    # What each of their properties earned us this month, so the owner
+    # page answers "is this building worth keeping?".
+    per_property = []
+    for prop in properties:
+        result = property_pnl(period_month=period, property_id=prop.id)
+        row = result["rows"][0] if result["rows"] else {}
+        per_property.append({
+            "property_id": prop.id,
+            "property_name": prop.name,
+            "rent_charged": row.get("rent_charged", 0.0),
+            "rent_paid": row.get("rent_paid", 0.0),
+            "expense_total": row.get("expense_total", 0.0),
+            "profit": row.get("profit", 0.0),
+        })
+
+    return {
+        "landlord": landlord.to_dict(),
+        "properties": [p.to_dict() for p in properties],
+        "agreements": agreement_rows,
+        "monthly_commitment": round(float(committed), 2),
+        "total_paid_to_date": statement["total_paid"],
+        "recent_payments": statement["payments"][-10:],
+        "month": period.isoformat(),
+        "per_property": per_property,
+    }
+
+
+def renewals_at_risk(within_days: int = 60) -> dict:
+    """Client contracts, landlord contracts, and generated agreements
+    expiring within `within_days` that have no successor yet — the
+    "someone needs to act on this soon" list. Reuses the exact
+    expiring-soon filter shape from routes/contracts.py and
+    services/agreements.py::bulk_renew(), just for display rather than
+    action, so the dashboard number and the bulk-renew count can never
+    disagree."""
+    from .agreements import expiring_generated_agreements
+    today = date.today()
+    cutoff = today + timedelta(days=within_days)
+
+    client_contracts = (
+        ClientContract.query
+        .filter(ClientContract.status == "active")
+        .filter(ClientContract.expiry_date <= cutoff)
+        .order_by(ClientContract.expiry_date.asc())
+        .all()
+    )
+    landlord_contracts = (
+        PropertyAgreement.query
+        .filter(PropertyAgreement.status == "active")
+        .filter(PropertyAgreement.expiry_date <= cutoff)
+        .order_by(PropertyAgreement.expiry_date.asc())
+        .all()
+    )
+    agreements = expiring_generated_agreements(within_days=within_days, today=today)
+
+    return {
+        "within_days": within_days,
+        "client_contracts": [
+            {"id": c.id, "contract_number": c.contract_number,
+             "client_name": c.client.name if c.client else None,
+             "expiry_date": c.expiry_date.isoformat(),
+             "days_left": (c.expiry_date - today).days}
+            for c in client_contracts
+        ],
+        "landlord_contracts": [
+            {"id": c.id, "property_name": c.property.name if c.property else None,
+             "landlord_name": c.landlord.name if c.landlord else None,
+             "expiry_date": c.expiry_date.isoformat(),
+             "days_left": (c.expiry_date - today).days}
+            for c in landlord_contracts
+        ],
+        "generated_agreements": [
+            {"id": a.id, "agreement_number": a.agreement_number,
+             "party_role": a.party_role,
+             "end_date": a.end_date.isoformat(),
+             "days_left": (a.end_date - today).days}
+            for a in agreements
+        ],
+        "total": len(client_contracts) + len(landlord_contracts) + len(agreements),
+    }
+
+
+def cheque_ageing() -> dict:
+    """Cheques past their due date and still sitting unresolved (never
+    deposited/cleared), plus anything already bounced — bucketed by days
+    overdue the same way rent ageing buckets by days late, just applied
+    to Cheque instead of RentCharge."""
+    today = date.today()
+    rows = (
+        Cheque.query
+        .filter(db.or_(
+            Cheque.status == "bounced",
+            db.and_(Cheque.status.in_(("received", "deposited")), Cheque.cheque_date < today),
+        ))
+        .order_by(Cheque.cheque_date.asc())
+        .all()
+    )
+    buckets = {"0-30": 0.0, "31-60": 0.0, "61-90": 0.0, "90+": 0.0}
+    out_rows = []
+    for c in rows:
+        days_overdue = (today - c.cheque_date).days
+        bucket = "0-30" if days_overdue <= 30 else "31-60" if days_overdue <= 60 else "61-90" if days_overdue <= 90 else "90+"
+        amount = float(c.amount)
+        buckets[bucket] += amount
+        out_rows.append({
+            "id": c.id, "cheque_number": c.cheque_number,
+            "amount": amount, "status": c.status,
+            "cheque_date": c.cheque_date.isoformat(), "days_overdue": days_overdue,
+        })
+    return {
+        "buckets": {k: round(v, 2) for k, v in buckets.items()},
+        "total": round(sum(buckets.values()), 2),
+        "rows": out_rows[:20],
     }

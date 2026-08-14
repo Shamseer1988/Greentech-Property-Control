@@ -13,7 +13,7 @@ def test_openapi_spec_is_served_in_test_env(client):
     paths = spec["paths"]
     assert "/api/v1/auth/login" in paths
     assert "/api/v1/auth/me" in paths
-    assert "/api/v1/employees" in paths
+    assert "/api/v1/landlords" in paths
     assert "/api/v1/landlords" in paths
 
 

@@ -141,9 +141,11 @@ def post_renewal(
         remarks=remarks, actor_id=actor_id,
     )
     for p in previous:
-        p.is_active = False
+        p.status = "renewed"
         p.renewal_status = "renewed"
         p.updated_by = actor_id
+    if previous:
+        _carry_units_and_record_renewal(previous[0], new_agreement, actor_id=actor_id)
     renewal.new_agreement_id = new_agreement.id
     db.session.flush()
     return renewal
@@ -153,9 +155,12 @@ def _create_new_agreement(*, prop, landlord, start, expiry, agreement_number,
                           monthly_rent, security_deposit, payment_terms, notice_period,
                           reminder_days_before_expiry, kahramaa_account, municipality_ref,
                           remarks, actor_id) -> PropertyAgreement:
+    from .landlord_contracts import next_landlord_contract_number
+
     new_agreement = PropertyAgreement(
         property_id=prop.id,
         landlord_id=landlord.id,
+        contract_number=next_landlord_contract_number(),
         agreement_number=agreement_number,
         start_date=start,
         expiry_date=expiry,
@@ -167,7 +172,6 @@ def _create_new_agreement(*, prop, landlord, start, expiry, agreement_number,
         kahramaa_account=kahramaa_account,
         municipality_ref=municipality_ref,
         reminder_days_before_expiry=int(reminder_days_before_expiry or 90),
-        is_active=True,
         remarks=remarks,
         created_by=actor_id,
         updated_by=actor_id,
@@ -175,6 +179,50 @@ def _create_new_agreement(*, prop, landlord, start, expiry, agreement_number,
     db.session.add(new_agreement)
     db.session.flush()
     return new_agreement
+
+
+def _carry_units_and_record_renewal(old_agreement: PropertyAgreement,
+                                    new_agreement: PropertyAgreement, *, actor_id: int) -> None:
+    """Move active unit allocations from the old landlord contract to
+    the new one, closing the old rows the day before the new term
+    starts — mirrors `services.contracts.renew_contract` on the client
+    side. Also writes a `renewal` amendment on the OLD contract (the
+    new one has no history yet); `renewed_to_id` links the two."""
+    from datetime import timedelta
+    from ..models import LandlordContractUnit, LandlordContractAmendment
+    from .landlord_contracts import next_amendment_number
+
+    old_agreement.renewed_to_id = new_agreement.id
+
+    carried = old_agreement.active_allocations(old_agreement.expiry_date)
+    if carried:
+        handover = new_agreement.start_date - timedelta(days=1)
+        for allocation in carried:
+            allocation.to_date = handover
+            allocation.updated_by = actor_id
+        db.session.flush()
+
+        for allocation in carried:
+            db.session.add(LandlordContractUnit(
+                contract_id=new_agreement.id, unit_id=allocation.unit_id,
+                from_date=new_agreement.start_date, unit_rent=allocation.unit_rent,
+                created_by=actor_id, updated_by=actor_id,
+            ))
+
+    sequence = len(old_agreement.amendments or []) + 1
+    db.session.add(LandlordContractAmendment(
+        contract_id=old_agreement.id,
+        amendment_number=next_amendment_number(),
+        sequence=sequence,
+        amendment_type="renewal",
+        effective_date=new_agreement.start_date,
+        old_rent=old_agreement.monthly_rent,
+        new_rent=new_agreement.monthly_rent,
+        unit_ids=",".join(str(a.unit_id) for a in carried) if carried else None,
+        remarks=f"renewed as {new_agreement.contract_number}",
+        created_by=actor_id, updated_by=actor_id,
+    ))
+    db.session.flush()
 
 
 def finalize_pending_renewal(renewal: LandlordRenewal, *, actor_id: int) -> LandlordRenewal:
@@ -218,9 +266,11 @@ def finalize_pending_renewal(renewal: LandlordRenewal, *, actor_id: int) -> Land
         .all()
     )
     for p in previous:
-        p.is_active = False
+        p.status = "renewed"
         p.renewal_status = "renewed"
         p.updated_by = actor_id
+    if previous:
+        _carry_units_and_record_renewal(previous[0], new_agreement, actor_id=actor_id)
 
     renewal.new_agreement_id = new_agreement.id
     renewal.status = "completed"

@@ -2,7 +2,7 @@
 
 Endpoints (all require `backup.manage`):
 
-    GET    /api/v1/backups                       — list .dump files on disk
+    GET    /api/v1/backups                       — list backup files on disk
     POST   /api/v1/backups                       — run a backup now (sync)
     GET    /api/v1/backups/<filename>/download   — download a backup file
     POST   /api/v1/backups/upload-restore        — upload a file and restore
@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 from pathlib import Path
 
 from flask import Blueprint, current_app, request, send_file
@@ -30,6 +29,28 @@ from ..utils.auth import require_permission, current_user
 from ..utils.responses import success_response, error_response
 
 backup_bp = Blueprint("backup", __name__)
+
+
+def _restored_message(source: str, result: dict) -> str:
+    """Say plainly what came back, and what didn't. A database-only
+    restore leaves every attachment row pointing at a file that no
+    longer exists — the operator needs to hear that now, not when they
+    click an agreement next month."""
+    parts = [f"Restored from {source}."]
+    if result.get("attachments") is None:
+        parts.append(
+            "This was a database-only backup, so uploaded files "
+            "(agreements, cheque copies, vouchers) were NOT restored."
+        )
+    else:
+        parts.append(f"{result['attachments']} attachment file(s) restored.")
+    if result.get("uploads_backup"):
+        parts.append(f"The previous uploads folder was kept at {result['uploads_backup']}.")
+    parts.append(
+        "You may need to sign in again — the restored database may have "
+        "different user records."
+    )
+    return " ".join(parts)
 
 
 @backup_bp.get("")
@@ -49,7 +70,7 @@ def info():
     now — so the Settings UI can show whether the operator's configured
     path is reachable and how much space is left."""
     try:
-        folder = str(backup._backup_dir())  # honours the setting + env
+        folder = str(backup.backup_dir())  # honours the setting + env
     except Exception:
         folder = os.getenv("BACKUP_FOLDER", os.path.join(os.path.dirname(__file__), "..", "..", "..", "backups"))
     try:
@@ -142,7 +163,7 @@ def restore_existing(filename: str):
     actor_id, actor_username = actor.id, actor.username
     try:
         path = backup.path_for(filename)
-        backup.restore_backup(path)
+        result = backup.restore_backup(path)
     except backup.BackupError as exc:
         return error_response(str(exc), 400)
 
@@ -150,12 +171,7 @@ def restore_existing(filename: str):
         "DB RESTORED from %s by user_id=%s username=%s",
         filename, actor_id, actor_username,
     )
-    return success_response(
-        message=(
-            f"Restored from {filename}. You may need to sign in again — "
-            "the restored database may have different user records."
-        )
-    )
+    return success_response(data=result, message=_restored_message(filename, result))
 
 
 @backup_bp.post("/upload-restore")
@@ -170,25 +186,25 @@ def upload_restore():
         return error_response("file is required", 400)
 
     safe_name = secure_filename(f.filename)
-    if not safe_name.endswith(".dump"):
-        return error_response("Only .dump files (custom pg_dump format) are accepted", 400)
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in backup.BACKUP_SUFFIXES:
+        return error_response(
+            "Only .zip (full backup) or .dump (database only) files are accepted", 400)
 
-    folder = Path(os.getenv("BACKUP_FOLDER", os.path.join(os.path.dirname(__file__), "..", "..", "..", "backups")))
-    folder.mkdir(parents=True, exist_ok=True)
-
-    # Save into the folder so the operator can re-download / verify
-    # later. If the name collides, suffix with a timestamp.
+    # Save into the same folder `list_backups` reads, so an uploaded
+    # archive appears in the history alongside the local ones.
+    folder = backup.backup_dir()
     target = folder / safe_name
     if target.exists():
         from datetime import datetime, timezone
-        stem = target.stem
-        target = folder / f"{stem}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%SZ')}.dump"
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%SZ')
+        target = folder / f"{target.stem}-{stamp}{suffix}"
 
     f.save(target)
 
     actor_id, actor_username = actor.id, actor.username
     try:
-        backup.restore_backup(target)
+        result = backup.restore_backup(target)
     except backup.BackupError as exc:
         return error_response(str(exc), 400)
 
@@ -197,9 +213,6 @@ def upload_restore():
         f.filename, target.name, actor_id, actor_username,
     )
     return success_response(
-        data={"filename": target.name},
-        message=(
-            f"Restored from uploaded {target.name}. You may need to sign in "
-            "again — the restored database may have different user records."
-        ),
+        data={"filename": target.name, **result},
+        message=_restored_message(f"uploaded {target.name}", result),
     )

@@ -1,221 +1,312 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Download, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Banknote, Building2, CheckCircle2, Layers, Loader2, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
-import { toast, errorMessage } from "@/components/ui/toast";
+import { inputClass, selectClass } from "@/components/ui/dialog";
+import { money } from "@/lib/contract-types";
 
-type Batch = {
+type Charge = {
   id: number;
-  filename: string | null;
-  total_rows: number;
-  success_rows: number;
-  error_rows: number;
-  status: "pending" | "completed" | "failed";
-  created_at: string;
+  period_month: string;
+  amount: number;
+  outstanding: number;
+  contract_number?: string | null;
+  is_free_month?: boolean;
 };
 
-type Result = {
-  batch: Batch;
-  summary: { posted_assignments: string[]; posted_transfers: string[] };
-  errors: { row_number: number; errors: string }[];
+type ClientGroup = {
+  kind: "client";
+  key: string;
+  client: { id: number; code?: string; name: string };
+  charges: Charge[];
+  total_outstanding: number;
 };
 
-export default function BulkMovementsPage() {
-  const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
-  const [history, setHistory] = useState<Batch[]>([]);
+type LandlordGroup = {
+  kind: "landlord";
+  key: string;
+  landlord: { id: number; code?: string; name: string };
+  property: { id: number; code?: string; name: string };
+  contract_id: number | null;
+  charges: Charge[];
+  total_outstanding: number;
+};
 
-  const loadHistory = async () => {
+type Group = ClientGroup | LandlordGroup;
+
+type PostResult = {
+  posted: Array<{ client_id?: number; landlord_id?: number; property_id?: number;
+                  receipt_number?: string; voucher_number?: string; amount: number }>;
+  failed: Array<{ client_id?: number; landlord_id?: number; property_id?: number; error: string }>;
+};
+
+function monthInput(value: string) {
+  // <input type="month"> wants YYYY-MM; the API wants YYYY-MM-01.
+  return value ? `${value}-01` : "";
+}
+
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const thisMonth = () => new Date().toISOString().slice(0, 7);
+
+export default function BulkEntryPage() {
+  const [mode, setMode] = useState<"receipts" | "landlord">("receipts");
+  const [fromMonth, setFromMonth] = useState(thisMonth());
+  const [toMonth, setToMonth] = useState(thisMonth());
+  const [loading, setLoading] = useState(false);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const [amounts, setAmounts] = useState<Record<number, string>>({});
+  const [payDate, setPayDate] = useState(todayIso());
+  const [payMode, setPayMode] = useState("cash");
+  const [posting, setPosting] = useState(false);
+  const [result, setResult] = useState<PostResult | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setResult(null);
     try {
-      const r = await api.get("/bulk-movements/batches");
-      setHistory(r.data.data);
-    } catch { /* ignore */ }
-  };
-
-  useEffect(() => { loadHistory(); }, []);
-
-  const downloadTemplate = async () => {
-    try {
-      const resp = await api.get("/bulk-movements/template", { responseType: "blob" });
-      const url = URL.createObjectURL(resp.data);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "bulk-movements-template.xlsx";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      toast.error("Download failed", errorMessage(err));
+      const params = { from_month: monthInput(fromMonth), to_month: monthInput(toMonth) };
+      const url = mode === "receipts" ? "/rent/bulk-preview" : "/expenses/landlord-dues/bulk-preview";
+      const resp = await api.get(url, { params });
+      const rows: Group[] = (resp.data?.data ?? []).map((r: Record<string, unknown>) =>
+        mode === "receipts"
+          ? { kind: "client", key: `c${(r.client as { id: number }).id}`, ...r }
+          : {
+              kind: "landlord",
+              key: `l${(r.landlord as { id: number }).id}-${(r.property as { id: number }).id}`,
+              ...r,
+            },
+      );
+      setGroups(rows);
+      const nextSelected: Record<number, boolean> = {};
+      const nextAmounts: Record<number, string> = {};
+      for (const g of rows) {
+        for (const c of g.charges) {
+          nextSelected[c.id] = c.outstanding > 0;
+          nextAmounts[c.id] = String(c.outstanding);
+        }
+      }
+      setSelected(nextSelected);
+      setAmounts(nextAmounts);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const upload = async () => {
-    if (!file) return;
-    setBusy(true);
+  const toggleGroup = (g: Group, value: boolean) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      for (const c of g.charges) next[c.id] = value;
+      return next;
+    });
+  };
+
+  const selectedTotal = useMemo(() => {
+    let total = 0;
+    for (const g of groups) {
+      for (const c of g.charges) {
+        if (selected[c.id]) total += Number(amounts[c.id] || 0);
+      }
+    }
+    return Math.round(total * 100) / 100;
+  }, [groups, selected, amounts]);
+
+  const selectedCount = useMemo(
+    () => groups.reduce((n, g) => n + g.charges.filter((c) => selected[c.id]).length, 0),
+    [groups, selected],
+  );
+
+  const post = async () => {
+    const entries = groups
+      .map((g) => {
+        const allocations = g.charges
+          .filter((c) => selected[c.id] && Number(amounts[c.id] || 0) > 0)
+          .map((c) => ({ charge_id: c.id, amount: Number(amounts[c.id]) }));
+        if (allocations.length === 0) return null;
+        return g.kind === "client"
+          ? { client_id: g.client.id, allocations }
+          : { landlord_id: g.landlord.id, property_id: g.property.id,
+              contract_id: g.contract_id, allocations };
+      })
+      .filter((e): e is NonNullable<typeof e> => e !== null);
+
+    if (entries.length === 0) return;
+    setPosting(true);
     setResult(null);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      // No Content-Type override — axios sets multipart/form-data
-      // with the boundary when it sees a FormData payload. Forcing
-      // the header drops the boundary and the upload fails.
-      const resp = await api.post("/bulk-movements/import", fd);
-      const data = resp.data.data as Result;
-      setResult(data);
-      if (data.batch.status === "completed") {
-        const a = data.summary.posted_assignments.length;
-        const t = data.summary.posted_transfers.length;
-        toast.success(`Bulk import complete`, `${a} assignment${a === 1 ? "" : "s"} and ${t} transfer${t === 1 ? "" : "s"} posted.`);
-      } else {
-        toast.warning("Import rejected", `${data.batch.error_rows} row(s) need fixes. Nothing was committed.`);
-      }
-      await loadHistory();
+      const url = mode === "receipts" ? "/rent/bulk-post" : "/expenses/landlord-dues/bulk-post";
+      const body = mode === "receipts"
+        ? { receipt_date: payDate, mode: payMode, entries }
+        : { payment_date: payDate, mode: payMode, entries };
+      const resp = await api.post(url, body);
+      await load();
+      setResult(resp.data?.data ?? null);
     } catch (err: unknown) {
-      toast.error("Import failed", errorMessage(err));
-    } finally { setBusy(false); }
+      const axiosErr = err as { response?: { data?: { data?: PostResult } } };
+      await load();
+      if (axiosErr.response?.data?.data) setResult(axiosErr.response.data.data);
+    } finally {
+      setPosting(false);
+    }
   };
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <Link href="/transactions" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to transactions
-        </Link>
-        <h1 className="mt-2 text-2xl lg:text-3xl font-semibold tracking-tight">Bulk allocation / Bulk transfer</h1>
+        <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">Bulk Entry</h1>
         <p className="text-sm text-muted-foreground">
-          Upload an Excel sheet to assign or transfer many employees in one go.
-          Every row is validated first — if any row has an error, nothing is committed.
+          Post receipts from many clients, or payments to many landlords, across a month range in
+          one batch — with room to edit amounts for partial payment before posting.
         </p>
       </div>
 
       <div className="glass rounded-xl p-4 space-y-4">
-        <div className="space-y-2">
-          <div className="text-sm font-medium inline-flex items-center gap-2">
-            <FileSpreadsheet className="h-4 w-4 text-primary" /> Workbook format
-          </div>
-          <ol className="text-sm text-muted-foreground space-y-1 list-decimal pl-5">
-            <li>Download the template and fill one row per movement.</li>
-            <li><code className="font-mono text-xs">mode</code> must be either <span className="font-mono">assign</span> or <span className="font-mono">transfer</span>.</li>
-            <li>Reference employees by <code className="font-mono text-xs">employee_code</code> (e.g. <span className="font-mono">EMP-00001</span>) and target beds by <code className="font-mono text-xs">bed_code</code>.</li>
-            <li>Transfers need an employee that already has a bed; assigns need one without a bed.</li>
-            <li>The same bed can&apos;t be targeted twice in the same file.</li>
-          </ol>
-        </div>
-
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={downloadTemplate}
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card/60 px-3 text-sm hover:bg-accent">
-            <Download className="h-4 w-4" /> Download template
-          </button>
-          <label className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card/60 px-3 text-sm hover:bg-accent cursor-pointer">
-            <Upload className="h-4 w-4" />
-            {file ? file.name : "Choose .xlsx file…"}
-            <input
-              type="file"
-              accept=".xlsx,.xlsm"
-              className="hidden"
-              onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }}
-            />
-          </label>
-          <button
-            onClick={upload}
-            disabled={!file || busy}
-            className="ml-auto h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
-          >
-            {busy ? "Validating…" : "Import"}
-          </button>
+          <div className="inline-flex rounded-lg border border-border p-0.5 bg-card/60">
+            <button
+              onClick={() => { setMode("receipts"); setGroups([]); setResult(null); }}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                mode === "receipts" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Banknote className="h-3.5 w-3.5" /> Client Receipts
+            </button>
+            <button
+              onClick={() => { setMode("landlord"); setGroups([]); setResult(null); }}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                mode === "landlord" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Building2 className="h-3.5 w-3.5" /> Landlord Payments
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 ml-auto flex-wrap">
+            <label className="text-xs text-muted-foreground">From</label>
+            <input type="month" value={fromMonth} onChange={(e) => setFromMonth(e.target.value)}
+                  className={inputClass + " !w-auto"} />
+            <label className="text-xs text-muted-foreground">To</label>
+            <input type="month" value={toMonth} onChange={(e) => setToMonth(e.target.value)}
+                  className={inputClass + " !w-auto"} />
+            <button onClick={load} disabled={loading}
+                    className="h-9 rounded-md border border-border bg-card/60 px-3 text-sm hover:bg-accent disabled:opacity-50 inline-flex items-center gap-1.5">
+              {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Layers className="h-3.5 w-3.5" />}
+              Load outstanding
+            </button>
+          </div>
         </div>
-
-        {result && (
-          <div className={
-            "rounded-lg p-3 text-sm border " +
-            (result.batch.status === "completed"
-              ? "bg-emerald-500/5 border-emerald-500/30 text-emerald-700 dark:text-emerald-400"
-              : "bg-rose-500/5 border-rose-500/30 text-rose-700 dark:text-rose-400")
-          }>
-            <div className="flex items-center gap-2 font-medium">
-              {result.batch.status === "completed"
-                ? <CheckCircle2 className="h-4 w-4" />
-                : <AlertTriangle className="h-4 w-4" />}
-              {result.batch.status === "completed"
-                ? `Imported ${result.batch.success_rows} of ${result.batch.total_rows} rows.`
-                : `Rejected — ${result.batch.error_rows} of ${result.batch.total_rows} row(s) need fixes. Nothing was committed.`}
-            </div>
-            {result.batch.status === "completed" && (
-              <div className="mt-1 text-xs text-foreground/80">
-                Posted {result.summary.posted_assignments.length} assignment(s) and {result.summary.posted_transfers.length} transfer(s).
-              </div>
-            )}
-            {result.errors.length > 0 && (
-              <div className="mt-2 max-h-72 overflow-y-auto rounded-md border border-rose-500/30 bg-background/40">
-                <table className="w-full text-xs">
-                  <thead className="text-left text-muted-foreground bg-card/60 sticky top-0">
-                    <tr>
-                      <th className="py-1.5 px-2 w-16">Row</th>
-                      <th className="py-1.5 px-2">Errors</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.errors.map((e) => (
-                      <tr key={e.row_number} className="border-t border-border/40">
-                        <td className="py-1.5 px-2 font-mono">{e.row_number}</td>
-                        <td className="py-1.5 px-2 text-foreground">{e.errors}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
-      <div className="glass rounded-xl p-4">
-        <div className="text-sm font-medium mb-3">Recent batches</div>
-        {history.length === 0 ? (
-          <div className="text-sm text-muted-foreground">No imports yet.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs text-muted-foreground border-b border-border">
-                <tr>
-                  <th className="py-2 pr-4">When</th>
-                  <th className="py-2 pr-4">File</th>
-                  <th className="py-2 pr-4">Status</th>
-                  <th className="py-2 pr-4 text-right">Success</th>
-                  <th className="py-2 pr-4 text-right">Errors</th>
-                  <th className="py-2 pr-4 text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((b) => (
-                  <tr key={b.id} className="border-b border-border/60">
-                    <td className="py-2 pr-4 text-muted-foreground">{new Date(b.created_at).toLocaleString()}</td>
-                    <td className="py-2 pr-4 font-mono text-xs truncate max-w-[18rem]">{b.filename ?? "—"}</td>
-                    <td className="py-2 pr-4">
-                      <span className={
-                        "rounded-full px-2 py-0.5 text-xs " +
-                        (b.status === "completed"
-                          ? "bg-emerald-500/10 text-emerald-600"
-                          : b.status === "failed"
-                            ? "bg-rose-500/10 text-rose-600"
-                            : "bg-muted text-muted-foreground")
-                      }>
-                        {b.status}
+      {result && (
+        <div className="glass rounded-xl p-4 space-y-2">
+          <div className="text-sm font-medium">
+            {result.posted.length} posted{result.failed.length > 0 ? `, ${result.failed.length} failed` : ""}
+          </div>
+          {result.posted.length > 0 && (
+            <ul className="text-xs text-muted-foreground space-y-0.5">
+              {result.posted.map((p, i) => (
+                <li key={i} className="inline-flex items-center gap-1.5 mr-4">
+                  <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                  {p.receipt_number || p.voucher_number} — {money(p.amount)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {result.failed.length > 0 && (
+            <ul className="text-xs text-red-600 space-y-0.5">
+              {result.failed.map((f, i) => (
+                <li key={i} className="inline-flex items-center gap-1.5">
+                  <XCircle className="h-3 w-3" /> {f.error}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {groups.length === 0 && !loading && (
+        <div className="glass rounded-xl p-8 text-center text-sm text-muted-foreground">
+          Pick a month range and click &ldquo;Load outstanding&rdquo; to see who has dues in that window.
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {groups.map((g) => {
+          const allChecked = g.charges.every((c) => selected[c.id]);
+          const label = g.kind === "client" ? g.client.name : `${g.landlord.name} — ${g.property.name}`;
+          const sub = g.kind === "client" ? g.client.code : g.property.code;
+          return (
+            <div key={g.key} className="glass rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card/40">
+                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                  <input type="checkbox" checked={allChecked}
+                         onChange={(e) => toggleGroup(g, e.target.checked)} />
+                  {label}
+                  {sub && <span className="text-xs text-muted-foreground font-mono">{sub}</span>}
+                </label>
+                <span className="text-sm font-medium">{money(g.total_outstanding)} outstanding</span>
+              </div>
+              <div className="divide-y divide-border">
+                {g.charges.map((c) => (
+                  <div key={c.id} className="flex items-center gap-3 px-4 py-2 text-sm">
+                    <input type="checkbox" checked={!!selected[c.id]}
+                           onChange={(e) => setSelected((prev) => ({ ...prev, [c.id]: e.target.checked }))} />
+                    <span className="font-mono text-xs w-24 shrink-0">{c.period_month}</span>
+                    {c.contract_number && (
+                      <span className="text-xs text-muted-foreground font-mono w-32 shrink-0 truncate">
+                        {c.contract_number}
                       </span>
-                    </td>
-                    <td className="py-2 pr-4 text-right font-mono">{b.success_rows}</td>
-                    <td className="py-2 pr-4 text-right font-mono">{b.error_rows}</td>
-                    <td className="py-2 pr-4 text-right font-mono">{b.total_rows}</td>
-                  </tr>
+                    )}
+                    <span className="text-xs text-muted-foreground w-24 shrink-0">Due {money(c.amount)}</span>
+                    <span className="text-xs text-muted-foreground w-28 shrink-0">
+                      Outstanding {money(c.outstanding)}
+                    </span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <span className="text-xs text-muted-foreground">
+                        {mode === "receipts" ? "Receive now" : "Pay now"}
+                      </span>
+                      <input
+                        type="number" step="0.01" min={0} max={c.outstanding}
+                        value={amounts[c.id] ?? ""}
+                        onChange={(e) => setAmounts((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                        className={inputClass + " !w-28 !h-8 text-right"}
+                      />
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </div>
+            </div>
+          );
+        })}
       </div>
+
+      {groups.length > 0 && (
+        <div className="sticky bottom-4 glass-strong rounded-xl p-4 flex items-center gap-3 flex-wrap shadow-xl">
+          <div className="text-sm">
+            <span className="font-semibold">{selectedCount}</span> row(s) selected —{" "}
+            <span className="font-semibold">{money(selectedTotal)}</span> total
+          </div>
+          <div className="flex items-center gap-2 ml-auto flex-wrap">
+            <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)}
+                  className={inputClass + " !w-auto"} />
+            <select value={payMode} onChange={(e) => setPayMode(e.target.value)}
+                    className={selectClass + " !w-auto"}>
+              <option value="cash">Cash</option>
+              <option value="cheque">Cheque</option>
+              <option value="online">Online</option>
+            </select>
+            <button
+              onClick={post}
+              disabled={posting || selectedTotal <= 0}
+              className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-1.5"
+            >
+              {posting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Post batch
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

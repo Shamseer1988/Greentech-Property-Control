@@ -61,14 +61,14 @@ def test_users_list(client, auth_headers):
 
 def test_create_and_login_regular_user(app, client, auth_headers):
     roles = client.get("/api/v1/roles", headers=auth_headers).get_json()["data"]
-    hr = next(r for r in roles if r["code"] == "hr_executive")
+    hr = next(r for r in roles if r["code"] == "accounts")
 
     resp = client.post(
         "/api/v1/users",
         headers=auth_headers,
         json={
             "username": "hr1",
-            "email": "hr1@pugroup.local",
+            "email": "hr1@greentech.local",
             "full_name": "HR One",
             "password": "Password123",
             "role_ids": [hr["id"]],
@@ -84,7 +84,7 @@ def test_create_and_login_regular_user(app, client, auth_headers):
     hr_headers = {"X-CSRF-TOKEN": csrf}
 
     me = hr_client.get("/api/v1/auth/me").get_json()["data"]
-    assert "employee.view" in me["permissions"]
+    assert "property.view" in me["permissions"]
     assert "user.manage" not in me["permissions"]
 
     forbidden = hr_client.post(

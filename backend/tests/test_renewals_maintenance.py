@@ -12,16 +12,14 @@ def _make_landlord(client, auth_headers, name="L"):
     return client.post("/api/v1/landlords", headers=auth_headers, json={"name": name}).get_json()["data"]
 
 
-def _make_floor_room_bed(client, auth_headers, prop_id):
+def _make_floor_units(client, auth_headers, prop_id):
     f = client.post(f"/api/v1/properties/{prop_id}/floors", headers=auth_headers,
                     json={"floor_number": "1"}).get_json()["data"]
-    r = client.post(f"/api/v1/floors/{f['id']}/rooms", headers=auth_headers,
-                    json={"room_number": "101", "capacity": 2}).get_json()["data"]
-    b1 = client.post(f"/api/v1/rooms/{r['id']}/beds", headers=auth_headers,
-                     json={"bed_number": "1"}).get_json()["data"]
-    b2 = client.post(f"/api/v1/rooms/{r['id']}/beds", headers=auth_headers,
-                     json={"bed_number": "2"}).get_json()["data"]
-    return f, r, [b1, b2]
+    r1 = client.post(f"/api/v1/floors/{f['id']}/units", headers=auth_headers,
+                     json={"unit_number": "101"}).get_json()["data"]
+    r2 = client.post(f"/api/v1/floors/{f['id']}/units", headers=auth_headers,
+                     json={"unit_number": "102"}).get_json()["data"]
+    return f, [r1, r2]
 
 
 # ---------- Renewals ----------
@@ -71,6 +69,62 @@ def test_renewal_archives_previous_and_records_transaction(client, auth_headers)
     assert archived[0]["renewal_status"] == "renewed"
 
 
+def test_renewal_carries_units_and_records_amendment(client, auth_headers):
+    prop = _make_property(client, auth_headers, "CarryProp")
+    ll = _make_landlord(client, auth_headers, "CarryLL")
+    _, units = _make_floor_units(client, auth_headers, prop["id"])
+    today = date.today()
+
+    old = client.post(
+        f"/api/v1/properties/{prop['id']}/agreements", headers=auth_headers,
+        json={
+            "landlord_id": ll["id"],
+            "start_date": (today - timedelta(days=200)).isoformat(),
+            "expiry_date": (today + timedelta(days=30)).isoformat(),
+            "monthly_rent": 10000,
+        },
+    ).get_json()["data"]
+
+    add = client.post(f"/api/v1/landlord-contracts/{old['id']}/amendments/add-units",
+                      headers=auth_headers, json={
+                          "unit_ids": [units[0]["id"], units[1]["id"]],
+                          "effective_date": (today - timedelta(days=200)).isoformat(),
+                      })
+    assert add.status_code == 200, add.get_data(as_text=True)
+
+    new_start = today + timedelta(days=31)
+    resp = client.post(
+        "/api/v1/renewals", headers=auth_headers,
+        json={
+            "property_id": prop["id"],
+            "landlord_id": ll["id"],
+            "new_start_date": new_start.isoformat(),
+            "new_expiry_date": (today + timedelta(days=395)).isoformat(),
+            "new_monthly_rent": 11000,
+        },
+    )
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    new_agreement = resp.get_json()["data"]["new_agreement"]
+
+    new_detail = client.get(f"/api/v1/landlord-contracts/{new_agreement['id']}",
+                            headers=auth_headers).get_json()["data"]
+    assert new_detail["units_count"] == 2
+    assert {u["unit"]["unit_number"] for u in new_detail["units"]} == {units[0]["unit_number"], units[1]["unit_number"]}
+
+    old_detail = client.get(f"/api/v1/landlord-contracts/{old['id']}",
+                            headers=auth_headers).get_json()["data"]
+    assert old_detail["renewed_to_id"] == new_agreement["id"]
+    # The new term starts in 31 days, so as of *today* the old contract
+    # still legitimately holds the units — the handover row (`to_date`)
+    # is dated the day before the new term starts, not today.
+    assert old_detail["units_count"] == 2
+    renewal_amendments = [a for a in old_detail["amendments"] if a["amendment_type"] == "renewal"]
+    assert len(renewal_amendments) == 1
+    assert renewal_amendments[0]["old_rent"] == 10000.0
+    assert renewal_amendments[0]["new_rent"] == 11000.0
+    assert sorted(renewal_amendments[0]["unit_ids"]) == sorted([units[0]["id"], units[1]["id"]])
+
+
 def test_renewal_with_no_prior_agreement(client, auth_headers):
     prop = _make_property(client, auth_headers, "Fresh")
     ll = _make_landlord(client, auth_headers, "L2")
@@ -109,110 +163,61 @@ def test_renewal_rejects_inverted_dates(client, auth_headers):
 
 # ---------- Maintenance ----------
 
-def test_bed_maintenance_blocks_assignment(client, auth_headers):
-    prop = _make_property(client, auth_headers, "MP1")
-    _, room, beds = _make_floor_room_bed(client, auth_headers, prop["id"])
-    emp = client.post(
-        "/api/v1/employees", headers=auth_headers,
-        json={"full_name": "Ahmed", "gender": "male"},
-    ).get_json()["data"]
-
+def test_unit_maintenance_and_completion_restores(client, auth_headers):
+    prop = _make_property(client, auth_headers, "MP4")
+    _, units = _make_floor_units(client, auth_headers, prop["id"])
+    unit = units[0]
     resp = client.post(
         "/api/v1/maintenance", headers=auth_headers,
-        json={"entity_type": "bed", "entity_id": beds[0]["id"], "reason": "broken AC"},
+        json={"entity_type": "unit", "entity_id": unit["id"], "reason": "deep clean"},
     )
     assert resp.status_code == 201
     rec = resp.get_json()["data"]
-    assert rec["transaction_number"].startswith("MAINT-")
-    assert rec["prior_status"] == "empty"
 
-    # Assigning to that bed is rejected
-    bad = client.post(
-        "/api/v1/assignments", headers=auth_headers,
-        json={"employee_id": emp["id"], "bed_id": beds[0]["id"]},
-    )
-    assert bad.status_code == 400
-    assert "maintenance" in bad.get_json()["message"].lower()
+    now = client.get(f"/api/v1/units/{unit['id']}", headers=auth_headers).get_json()["data"]
+    assert now["occupancy_status"] == "maintenance"
 
-    # Complete restores the bed
-    done = client.post(
-        f"/api/v1/maintenance/{rec['id']}/complete", headers=auth_headers,
-        json={"actual_end_date": date.today().isoformat()},
-    )
-    assert done.status_code == 200
-    assert done.get_json()["data"]["status"] == "completed"
-
-    bed_after = client.get(f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers).get_json()["data"]
-    by_code = {b["bed_code"]: b for b in bed_after}
-    assert by_code[beds[0]["bed_code"]]["status"] == "empty"
+    client.post(f"/api/v1/maintenance/{rec['id']}/complete", headers=auth_headers, json={})
+    after = client.get(f"/api/v1/units/{unit['id']}", headers=auth_headers).get_json()["data"]
+    assert after["occupancy_status"] == "empty"
 
 
-def test_cannot_maintain_occupied_bed(client, auth_headers):
-    prop = _make_property(client, auth_headers, "MP2")
-    _, _, beds = _make_floor_room_bed(client, auth_headers, prop["id"])
-    emp = client.post(
-        "/api/v1/employees", headers=auth_headers,
-        json={"full_name": "Ahmed", "gender": "male"},
-    ).get_json()["data"]
-    client.post(
-        "/api/v1/assignments", headers=auth_headers,
-        json={"employee_id": emp["id"], "bed_id": beds[0]["id"]},
-    )
+def test_cannot_maintain_occupied_unit(client, auth_headers):
+    prop = _make_property(client, auth_headers, "MP4b")
+    _, units = _make_floor_units(client, auth_headers, prop["id"])
+    unit = units[0]
+    client.post(f"/api/v1/units/{unit['id']}/status", headers=auth_headers,
+                json={"status": "occupied"})
+
     resp = client.post(
         "/api/v1/maintenance", headers=auth_headers,
-        json={"entity_type": "bed", "entity_id": beds[0]["id"]},
+        json={"entity_type": "unit", "entity_id": unit["id"], "reason": "no"},
     )
     assert resp.status_code == 400
     assert "occupied" in resp.get_json()["message"].lower()
 
 
-def test_room_maintenance_rejects_when_any_bed_occupied(client, auth_headers):
-    prop = _make_property(client, auth_headers, "MP3")
-    _, room, beds = _make_floor_room_bed(client, auth_headers, prop["id"])
-    emp = client.post(
-        "/api/v1/employees", headers=auth_headers,
-        json={"full_name": "Ahmed", "gender": "male"},
-    ).get_json()["data"]
-    client.post(
-        "/api/v1/assignments", headers=auth_headers,
-        json={"employee_id": emp["id"], "bed_id": beds[0]["id"]},
-    )
+def test_unknown_entity_type_rejected(client, auth_headers):
+    prop = _make_property(client, auth_headers, "MP4c")
+    _, units = _make_floor_units(client, auth_headers, prop["id"])
     resp = client.post(
         "/api/v1/maintenance", headers=auth_headers,
-        json={"entity_type": "room", "entity_id": room["id"]},
+        json={"entity_type": "warehouse", "entity_id": units[0]["id"]},
     )
     assert resp.status_code == 400
 
 
-def test_room_maintenance_and_completion_recomputes(client, auth_headers):
-    prop = _make_property(client, auth_headers, "MP4")
-    _, room, _ = _make_floor_room_bed(client, auth_headers, prop["id"])
-    resp = client.post(
-        "/api/v1/maintenance", headers=auth_headers,
-        json={"entity_type": "room", "entity_id": room["id"], "reason": "deep clean"},
-    )
-    assert resp.status_code == 201
-    rec = resp.get_json()["data"]
-
-    room_now = client.get(f"/api/v1/rooms/{room['id']}", headers=auth_headers).get_json()["data"]
-    assert room_now["occupancy_status"] == "maintenance"
-
-    client.post(f"/api/v1/maintenance/{rec['id']}/complete", headers=auth_headers, json={})
-    room_after = client.get(f"/api/v1/rooms/{room['id']}", headers=auth_headers).get_json()["data"]
-    assert room_after["occupancy_status"] == "empty"
-
-
 def test_duplicate_open_maintenance_rejected(client, auth_headers):
     prop = _make_property(client, auth_headers, "MP5")
-    _, _, beds = _make_floor_room_bed(client, auth_headers, prop["id"])
+    _, units = _make_floor_units(client, auth_headers, prop["id"])
     first = client.post(
         "/api/v1/maintenance", headers=auth_headers,
-        json={"entity_type": "bed", "entity_id": beds[0]["id"]},
+        json={"entity_type": "unit", "entity_id": units[0]["id"]},
     )
     assert first.status_code == 201
     dup = client.post(
         "/api/v1/maintenance", headers=auth_headers,
-        json={"entity_type": "bed", "entity_id": beds[0]["id"]},
+        json={"entity_type": "unit", "entity_id": units[0]["id"]},
     )
     assert dup.status_code == 400
 
@@ -236,10 +241,10 @@ def test_property_maintenance_round_trip(client, auth_headers):
 
 def test_maintenance_list_filters(client, auth_headers):
     prop = _make_property(client, auth_headers, "MP7")
-    _, _, beds = _make_floor_room_bed(client, auth_headers, prop["id"])
+    _, units = _make_floor_units(client, auth_headers, prop["id"])
     client.post("/api/v1/maintenance", headers=auth_headers,
-                json={"entity_type": "bed", "entity_id": beds[0]["id"]})
-    rows = client.get("/api/v1/maintenance?entity_type=bed", headers=auth_headers).get_json()
+                json={"entity_type": "unit", "entity_id": units[0]["id"]})
+    rows = client.get("/api/v1/maintenance?entity_type=unit", headers=auth_headers).get_json()
     assert rows["meta"]["count"] >= 1
     by_prop = client.get(f"/api/v1/maintenance?property_id={prop['id']}", headers=auth_headers).get_json()
     assert by_prop["meta"]["count"] >= 1

@@ -10,7 +10,7 @@
 #  4. Seeds backend/.env from backend/.env.example on first run.
 #
 # It does NOT install PostgreSQL / Redis / nginx — those are operator
-# steps documented in docs/BARE_METAL_LINUX.md.
+# steps documented in docs/DEPLOYMENT.md.
 
 set -euo pipefail
 
@@ -41,7 +41,7 @@ for cand in python3.11 python3 python; do
     fi
 done
 if [[ -z "$PYTHON" ]]; then
-    echo "ERROR: Python 3.11+ not found. See docs/BARE_METAL_LINUX.md §1." >&2
+    echo "ERROR: Python 3.11+ not found. See docs/DEPLOYMENT.md." >&2
     exit 1
 fi
 
@@ -51,7 +51,7 @@ fi
 say "Other prereqs"
 for cmd in node npm psql; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
-        echo "ERROR: $cmd not found in PATH. Install it (see docs/BARE_METAL_LINUX.md) and re-run." >&2
+        echo "ERROR: $cmd not found in PATH. Install it (see docs/DEPLOYMENT.md) and re-run." >&2
         exit 1
     fi
     echo "  $cmd : $(command -v "$cmd")"
@@ -117,6 +117,6 @@ fi
 
 printf '\n\033[32mDone.\033[0m Next steps:\n'
 echo "  1. Edit backend/.env (secrets, DB password)."
-echo "  2. Create the Postgres database + role (see docs/BARE_METAL_LINUX.md §2)."
+echo "  2. Create the Postgres database + role (see docs/DEPLOYMENT.md)."
 echo "  3. Run: bash scripts/bootstrap-db.sh        (one-time schema + seed)"
 echo "  4. Run: bash scripts/start-all.sh           (dev) — OR install systemd units (prod)."

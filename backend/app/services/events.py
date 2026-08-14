@@ -7,7 +7,7 @@ beat, additional waitress instances if any); falls back to an
 in-process queue otherwise (single-process dev / tests).
 
 Channels:
-  * 'occupancy' — bed/room status changes (assignment, transfer, etc.)
+  * 'occupancy' — unit status changes (allocation, release, maintenance)
   * 'notification:<user_id>' — per-user notification deliveries
 """
 import json
@@ -43,7 +43,7 @@ def publish(channel: str, payload: dict) -> None:
     r = _redis()
     if r is not None:
         try:
-            r.publish(f"pug:{channel}", body)
+            r.publish(f"greentech:{channel}", body)
             return
         except Exception:
             pass  # fall through to in-process
@@ -66,7 +66,7 @@ def subscribe(channel: str) -> Iterator[str]:
     r = _redis()
     if r is not None:
         pubsub = r.pubsub(ignore_subscribe_messages=True)
-        pubsub.subscribe(f"pug:{channel}")
+        pubsub.subscribe(f"greentech:{channel}")
         try:
             while True:
                 # Poll with a timeout so the caller (the SSE route) gets

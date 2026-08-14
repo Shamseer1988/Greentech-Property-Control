@@ -9,15 +9,20 @@ import {
   useNotificationsFeed, useUnreadCount, useMarkAllRead, useMarkRead,
 } from "@/lib/use-notifications";
 
+type ExpiringDoc = {
+  attachment_id: number; entity_type: string; entity_name: string | null;
+  category: string | null; doc_number: string | null; expiry_date: string; days_left: number;
+};
+
 type AlertsPayload = {
   critical: {
     expired_agreements: { agreement_id: number; property_id: number; property_name: string | null; expiry_date: string; days_left: number }[];
     expiring_within_7_days: { agreement_id: number; property_id: number; property_name: string | null; expiry_date: string; days_left: number }[];
-    over_capacity_rooms: { room_id: number; property_id: number; room_number: string; bed_count: number; capacity: number }[];
+    expired_documents: ExpiringDoc[];
   };
   warning: {
     expiring_within_30_days: { agreement_id: number; property_id: number; property_name: string | null; expiry_date: string; days_left: number }[];
-    unassigned_employees: { id: number; code: string; full_name: string }[];
+    documents_expiring_within_30_days: ExpiringDoc[];
   };
   info: { maintenance_in_progress: { id: number; transaction_number: string; entity_type: string; entity_id: number }[] };
   counts: { critical: number; warning: number; info: number };
@@ -112,7 +117,7 @@ export function NotificationBell() {
                 <div className="text-sm text-muted-foreground text-center py-10">All clear</div>
               ) : (
                 <>
-                  {data.critical.expired_agreements.length + data.critical.expiring_within_7_days.length + data.critical.over_capacity_rooms.length > 0 && (
+                  {data.critical.expired_agreements.length + data.critical.expiring_within_7_days.length + data.critical.expired_documents.length > 0 && (
                     <Group title="Critical" icon={AlertOctagon} tone="rose">
                       {data.critical.expired_agreements.map((a) => (
                         <Row key={`exp-${a.agreement_id}`}>
@@ -126,15 +131,17 @@ export function NotificationBell() {
                           <div className="text-xs text-rose-600">Expires in {a.days_left}d · {a.expiry_date}</div>
                         </Row>
                       ))}
-                      {data.critical.over_capacity_rooms.map((r) => (
-                        <Row key={`cap-${r.room_id}`}>
-                          <Link href={`/properties/${r.property_id}`} onClick={() => setOpen(false)} className="font-medium hover:text-primary">Room {r.room_number}</Link>
-                          <div className="text-xs text-rose-600">{r.bed_count} of {r.capacity} beds</div>
+                      {data.critical.expired_documents.map((d) => (
+                        <Row key={`doc-${d.attachment_id}`}>
+                          <span className="font-medium">{d.entity_name ?? d.entity_type}</span>
+                          <div className="text-xs text-rose-600">
+                            {(d.category ?? "document").replaceAll("_", " ")} expired {Math.abs(d.days_left)}d ago
+                          </div>
                         </Row>
                       ))}
                     </Group>
                   )}
-                  {data.warning.expiring_within_30_days.length + data.warning.unassigned_employees.length > 0 && (
+                  {data.warning.expiring_within_30_days.length + data.warning.documents_expiring_within_30_days.length > 0 && (
                     <Group title="Warning" icon={AlertTriangle} tone="amber">
                       {data.warning.expiring_within_30_days.map((a) => (
                         <Row key={`30-${a.agreement_id}`}>
@@ -142,22 +149,21 @@ export function NotificationBell() {
                           <div className="text-xs text-amber-600">Expires in {a.days_left}d</div>
                         </Row>
                       ))}
-                      {data.warning.unassigned_employees.slice(0, 10).map((e) => (
-                        <Row key={`u-${e.id}`}>
-                          <Link href={`/employees/${e.id}`} onClick={() => setOpen(false)} className="font-medium hover:text-primary">{e.full_name}</Link>
-                          <div className="text-xs text-amber-600">Needs accommodation</div>
+                      {data.warning.documents_expiring_within_30_days.map((d) => (
+                        <Row key={`docw-${d.attachment_id}`}>
+                          <span className="font-medium">{d.entity_name ?? d.entity_type}</span>
+                          <div className="text-xs text-amber-600">
+                            {(d.category ?? "document").replaceAll("_", " ")} expires in {d.days_left}d
+                          </div>
                         </Row>
                       ))}
-                      {data.warning.unassigned_employees.length > 10 && (
-                        <div className="text-xs text-muted-foreground">+{data.warning.unassigned_employees.length - 10} more</div>
-                      )}
                     </Group>
                   )}
                   {data.info.maintenance_in_progress.length > 0 && (
                     <Group title="In progress" icon={Info} tone="sky">
                       {data.info.maintenance_in_progress.slice(0, 10).map((m) => (
                         <Row key={`m-${m.id}`}>
-                          <Link href="/transactions/maintenance" onClick={() => setOpen(false)} className="font-medium hover:text-primary capitalize">{m.entity_type} #{m.entity_id}</Link>
+                          <span className="font-medium capitalize">{m.entity_type} #{m.entity_id}</span>
                           <div className="text-xs text-sky-600 font-mono">{m.transaction_number}</div>
                         </Row>
                       ))}

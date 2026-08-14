@@ -1,20 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouteParams } from "@/lib/use-route-params";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
-  ArrowLeft, Building2, Paperclip, FileText, Layers, BedDouble,
+  ArrowLeft, Building2, Paperclip, FileText, Layers, DoorOpen,
   Calendar, AlertTriangle, Plus, Pencil, Trash2, Hash,
-  SlidersHorizontal,
+  SlidersHorizontal, Banknote,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { keys } from "@/lib/query-keys";
 import { Can } from "@/components/can";
 import { Modal, Field, inputClass, selectClass, textareaClass } from "@/components/ui/dialog";
 import { toast, errorMessage } from "@/components/ui/toast";
 import { AttachmentsTab } from "@/components/attachments-tab";
-import { BedsPanel } from "@/components/beds-panel";
+import { PropertyMoneyTab } from "@/components/property-money-tab";
+import { usePropertyTypes } from "@/lib/use-property-types";
 
 type Property = {
   id: number;
@@ -31,10 +34,8 @@ type Property = {
   status: string;
   managed_by: string | null;
   floors_count: number;
-  rooms_count: number;
-  beds_count: number;
+  units_count: number;
   remarks: string | null;
-  default_division: { id: number; code: string; name: string } | null;
   active_agreement: Agreement | null;
 };
 
@@ -56,9 +57,9 @@ type Agreement = {
 
 type Landlord = { id: number; code: string; name: string };
 
-type TabKey = "overview" | "agreement" | "floors" | "rooms" | "attachments";
+type TabKey = "overview" | "money" | "agreement" | "floors" | "units" | "attachments";
 
-const VALID_TABS: TabKey[] = ["overview", "agreement", "floors", "rooms", "attachments"];
+const VALID_TABS: TabKey[] = ["overview", "money", "agreement", "floors", "units", "attachments"];
 
 export default function PropertyDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = useRouteParams(params);
@@ -68,21 +69,16 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
     return q && VALID_TABS.includes(q) ? q : "overview";
   })();
   const [tab, setTab] = useState<TabKey>(initialTab);
-  const [property, setProperty] = useState<Property | null>(null);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
+  const propertyQuery = useQuery({
+    queryKey: keys.properties.detail(id),
+    queryFn: async () => (await api.get(`/properties/${id}`)).data.data as Property,
+  });
+  const property = propertyQuery.data ?? null;
+  const loading = propertyQuery.isLoading;
+  const load = () => qc.invalidateQueries({ queryKey: keys.properties.detail(id) });
   const [showStatusModal, setShowStatusModal] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const resp = await api.get(`/properties/${id}`);
-      setProperty(resp.data.data);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, [id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const [showEditModal, setShowEditModal] = useState(false);
 
   if (loading || !property) {
     return <div className="text-sm text-muted-foreground animate-pulse">Loading property…</div>;
@@ -90,9 +86,10 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
 
   const tabs: { key: TabKey; label: string; icon: typeof FileText }[] = [
     { key: "overview", label: "Overview", icon: Building2 },
+    { key: "money", label: "Rent & costs", icon: Banknote },
     { key: "agreement", label: "Agreement", icon: FileText },
     { key: "floors", label: "Floors", icon: Layers },
-    { key: "rooms", label: "Rooms & Beds", icon: BedDouble },
+    { key: "units", label: "Units", icon: DoorOpen },
     { key: "attachments", label: "Attachments", icon: Paperclip },
   ];
 
@@ -119,6 +116,15 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
             >
               Floor plan →
             </Link>
+            <Can perm="property.edit">
+              <button
+                type="button"
+                onClick={() => setShowEditModal(true)}
+                className="h-8 inline-flex items-center gap-1 rounded-md border border-border bg-card/60 px-2 text-xs hover:bg-accent"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </button>
+            </Can>
             <Can perm="property.deactivate">
               <button
                 type="button"
@@ -139,6 +145,13 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
         onChanged={async () => { setShowStatusModal(false); await load(); }}
       />
 
+      <EditPropertyDialog
+        open={showEditModal}
+        property={property}
+        onClose={() => setShowEditModal(false)}
+        onSaved={async () => { setShowEditModal(false); await load(); }}
+      />
+
       <div className="flex border-b border-border overflow-x-auto">
         {tabs.map(({ key, label, icon: Icon }) => (
           <button
@@ -155,9 +168,10 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
       </div>
 
       {tab === "overview" && <OverviewTab property={property} />}
+      {tab === "money" && <PropertyMoneyTab propertyId={property.id} />}
       {tab === "agreement" && <AgreementTab property={property} onUpdated={load} />}
       {tab === "floors" && <FloorsTab propertyId={property.id} />}
-      {tab === "rooms" && <RoomsTab propertyId={property.id} />}
+      {tab === "units" && <UnitsTab propertyId={property.id} />}
       {tab === "attachments" && <AttachmentsTab entityType="property" entityId={property.id} />}
     </div>
   );
@@ -182,10 +196,8 @@ function OverviewTab({ property }: { property: Property }) {
           <Cell k="Street" v={property.street} />
           <Cell k="Area" v={property.area} />
           <Cell k="City" v={property.city} />
-          <Cell k="Default division" v={property.default_division?.name} />
           <Cell k="Floors" v={property.floors_count} />
-          <Cell k="Rooms" v={property.rooms_count} />
-          <Cell k="Beds" v={property.beds_count} />
+          <Cell k="Units" v={property.units_count} />
           {property.remarks && (
             <div className="col-span-full">
               <div className="text-xs uppercase tracking-wide text-muted-foreground">Remarks</div>
@@ -211,28 +223,16 @@ function OverviewTab({ property }: { property: Property }) {
   );
 }
 
-type OccupancyPayload = {
-  beds: {
-    total: number; empty: number; occupied: number;
-    reserved: number; maintenance: number; blocked: number;
-    occupancy_percent: number;
-  };
-  rooms: {
-    total: number; empty: number; partially_occupied: number;
-    full: number; maintenance: number; blocked: number;
-  };
-};
-
 function OccupancySnapshot({ propertyId }: { propertyId: number }) {
-  const [data, setData] = useState<OccupancyPayload | null>(null);
+  const [units, setUnits] = useState<Unit[] | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api.get(`/properties/${propertyId}/occupancy`)
-      .then((r) => { if (!cancelled) setData(r.data.data); })
-      .catch(() => { if (!cancelled) setData(null); })
+    api.get(`/properties/${propertyId}/units`)
+      .then((r) => { if (!cancelled) setUnits(r.data.data); })
+      .catch(() => { if (!cancelled) setUnits(null); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [propertyId]);
@@ -240,11 +240,13 @@ function OccupancySnapshot({ propertyId }: { propertyId: number }) {
   if (loading) {
     return <div className="glass rounded-xl p-4 text-sm text-muted-foreground">Loading occupancy…</div>;
   }
-  if (!data) {
-    return <div className="glass rounded-xl p-4 text-sm text-muted-foreground">No occupancy data yet.</div>;
+  if (!units || units.length === 0) {
+    return <div className="glass rounded-xl p-4 text-sm text-muted-foreground">No units registered yet.</div>;
   }
-  const b = data.beds;
-  const r = data.rooms;
+  const count = (s: string) => units.filter((r) => r.occupancy_status === s).length;
+  const total = units.length;
+  const occupied = count("occupied");
+  const pct = total ? Math.round((occupied * 1000) / total) / 10 : 0;
   const counter = (label: string, value: number, tone: string) => (
     <div className={"rounded-md border px-3 py-2 " + tone}>
       <div className="text-lg font-semibold leading-none">{value}</div>
@@ -257,29 +259,20 @@ function OccupancySnapshot({ propertyId }: { propertyId: number }) {
         <div>
           <div className="text-sm font-semibold">Occupancy snapshot</div>
           <div className="text-xs text-muted-foreground">
-            Live counts from <span className="font-mono">/properties/{propertyId}/occupancy</span>. Refreshes when bed/room status changes.
+            Live unit counts. From Phase 2, occupancy derives from active client contracts.
           </div>
         </div>
         <div className="inline-flex items-baseline gap-2">
-          <span className="text-2xl font-semibold">{b.occupancy_percent}%</span>
-          <span className="text-xs text-muted-foreground">occupied of {b.total} bed{b.total === 1 ? "" : "s"}</span>
+          <span className="text-2xl font-semibold">{pct}%</span>
+          <span className="text-xs text-muted-foreground">occupied of {total} unit{total === 1 ? "" : "s"}</span>
         </div>
       </div>
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
-        {counter("Occupied", b.occupied, "bg-emerald-500/5 border-emerald-500/30 text-emerald-700 dark:text-emerald-400")}
-        {counter("Empty", b.empty, "bg-muted/30 border-border")}
-        {counter("Reserved", b.reserved, "bg-sky-500/5 border-sky-500/30 text-sky-700 dark:text-sky-400")}
-        {counter("Maintenance", b.maintenance, "bg-amber-500/5 border-amber-500/30 text-amber-700 dark:text-amber-400")}
-        {counter("Blocked", b.blocked, "bg-rose-500/5 border-rose-500/30 text-rose-700 dark:text-rose-400")}
-        {counter("Total", b.total, "border-border bg-card/60")}
-      </div>
-      <div className="text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
-        <span>Rooms — {r.total} total</span>
-        {r.empty > 0 && <span>· {r.empty} empty</span>}
-        {r.partially_occupied > 0 && <span>· {r.partially_occupied} partial</span>}
-        {r.full > 0 && <span>· {r.full} full</span>}
-        {r.maintenance > 0 && <span>· {r.maintenance} maintenance</span>}
-        {r.blocked > 0 && <span>· {r.blocked} blocked</span>}
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center">
+        {counter("Occupied", occupied, "bg-emerald-500/5 border-emerald-500/30 text-emerald-700 dark:text-emerald-400")}
+        {counter("Empty", count("empty"), "bg-muted/30 border-border")}
+        {counter("Maintenance", count("maintenance"), "bg-amber-500/5 border-amber-500/30 text-amber-700 dark:text-amber-400")}
+        {counter("Blocked", count("blocked"), "bg-rose-500/5 border-rose-500/30 text-rose-700 dark:text-rose-400")}
+        {counter("Total", total, "border-border bg-card/60")}
       </div>
     </div>
   );
@@ -321,6 +314,8 @@ function AgreementTab({ property, onUpdated }: { property: Property; onUpdated: 
   const [landlords, setLandlords] = useState<Landlord[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [amending, setAmending] = useState<Agreement | null>(null);
+  const active = rows.find((a) => a.is_active) ?? null;
 
   const load = async () => {
     setLoading(true);
@@ -343,9 +338,16 @@ function AgreementTab({ property, onUpdated }: { property: Property; onUpdated: 
       <div className="flex items-center justify-between">
         <div className="text-sm text-muted-foreground">Agreements history — newest active first, then renewed.</div>
         <Can perm="property.edit">
-          <button onClick={() => setShowForm(true)} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-            <Plus className="h-4 w-4" /> New / renew
-          </button>
+          <div className="flex items-center gap-2">
+            {active && (
+              <button onClick={() => setAmending(active)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card/60 px-3 text-sm hover:bg-accent">
+                <Pencil className="h-4 w-4" /> Amend agreement
+              </button>
+            )}
+            <button onClick={() => setShowForm(true)} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              <Plus className="h-4 w-4" /> New / renew
+            </button>
+          </div>
         </Can>
       </div>
 
@@ -391,19 +393,46 @@ function AgreementTab({ property, onUpdated }: { property: Property; onUpdated: 
         onClose={() => setShowForm(false)}
         onSaved={async () => { setShowForm(false); await load(); onUpdated(); }}
       />
+
+      <AgreementDialog
+        open={Boolean(amending)}
+        propertyId={property.id}
+        landlords={landlords}
+        prefillFrom={amending}
+        onClose={() => setAmending(null)}
+        onSaved={async () => { setAmending(null); await load(); onUpdated(); }}
+      />
     </div>
   );
 }
 
-function AgreementDialog({ open, propertyId, landlords, onClose, onSaved }: {
-  open: boolean; propertyId: number; landlords: Landlord[]; onClose: () => void; onSaved: () => void;
+function AgreementDialog({ open, propertyId, landlords, prefillFrom, onClose, onSaved }: {
+  open: boolean; propertyId: number; landlords: Landlord[]; prefillFrom?: Agreement | null;
+  onClose: () => void; onSaved: () => void;
 }) {
   const [form, setForm] = useState<Record<string, unknown>>({ reminder_days_before_expiry: 90 });
   const [busy, setBusy] = useState(false);
+  const isAmend = Boolean(prefillFrom);
 
   useEffect(() => {
-    if (open) { setForm({ reminder_days_before_expiry: 90 }); }
-  }, [open]);
+    if (!open) return;
+    if (prefillFrom) {
+      setForm({
+        landlord_id: prefillFrom.landlord.id,
+        agreement_number: prefillFrom.agreement_number ?? "",
+        reminder_days_before_expiry: prefillFrom.reminder_days_before_expiry ?? 90,
+        start_date: prefillFrom.start_date,
+        expiry_date: prefillFrom.expiry_date,
+        monthly_rent: prefillFrom.monthly_rent,
+        security_deposit: prefillFrom.security_deposit,
+        payment_terms: prefillFrom.payment_terms ?? "",
+        notice_period: prefillFrom.notice_period ?? "",
+        remarks: prefillFrom.remarks ?? "",
+      });
+    } else {
+      setForm({ reminder_days_before_expiry: 90 });
+    }
+  }, [open, prefillFrom]);
 
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -412,7 +441,7 @@ function AgreementDialog({ open, propertyId, landlords, onClose, onSaved }: {
     setBusy(true);
     try {
       await api.post(`/properties/${propertyId}/agreements`, form);
-      toast.success("Agreement saved");
+      toast.success(isAmend ? "Agreement amended" : "Agreement saved");
       onSaved();
     } catch (err: unknown) {
       toast.error("Save failed", errorMessage(err));
@@ -420,7 +449,7 @@ function AgreementDialog({ open, propertyId, landlords, onClose, onSaved }: {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="New / renew agreement" size="lg">
+    <Modal open={open} onClose={onClose} title={isAmend ? "Amend agreement" : "New / renew agreement"} size="lg">
       <form onSubmit={save} className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Landlord" span={2}>
@@ -429,27 +458,45 @@ function AgreementDialog({ open, propertyId, landlords, onClose, onSaved }: {
               {landlords.map((l) => <option key={l.id} value={l.id}>{l.name} ({l.code})</option>)}
             </select>
           </Field>
-          <Field label="Agreement number"><input className={inputClass} onChange={(e) => set("agreement_number", e.target.value)} /></Field>
+          <Field label="Agreement number">
+            <input className={inputClass} value={String(form.agreement_number ?? "")} onChange={(e) => set("agreement_number", e.target.value)} />
+          </Field>
           <Field label="Reminder days">
             <input type="number" className={inputClass} value={Number(form.reminder_days_before_expiry ?? 90)} onChange={(e) => set("reminder_days_before_expiry", Number(e.target.value))} />
           </Field>
-          <Field label="Start date"><input required type="date" className={inputClass} onChange={(e) => set("start_date", e.target.value)} /></Field>
-          <Field label="Expiry date"><input required type="date" className={inputClass} onChange={(e) => set("expiry_date", e.target.value)} /></Field>
-          <Field label="Monthly rent"><input type="number" step="0.01" className={inputClass} onChange={(e) => set("monthly_rent", e.target.value ? Number(e.target.value) : null)} /></Field>
-          <Field label="Security deposit"><input type="number" step="0.01" className={inputClass} onChange={(e) => set("security_deposit", e.target.value ? Number(e.target.value) : null)} /></Field>
-          <Field label="Payment terms"><input className={inputClass} onChange={(e) => set("payment_terms", e.target.value)} /></Field>
-          <Field label="Notice period"><input className={inputClass} onChange={(e) => set("notice_period", e.target.value)} /></Field>
+          <Field label="Start date">
+            <input required type="date" className={inputClass} value={String(form.start_date ?? "")} onChange={(e) => set("start_date", e.target.value)} />
+          </Field>
+          <Field label="Expiry date">
+            <input required type="date" className={inputClass} value={String(form.expiry_date ?? "")} onChange={(e) => set("expiry_date", e.target.value)} />
+          </Field>
+          <Field label="Monthly rent">
+            <input type="number" step="0.01" className={inputClass} value={form.monthly_rent == null ? "" : Number(form.monthly_rent)} onChange={(e) => set("monthly_rent", e.target.value ? Number(e.target.value) : null)} />
+          </Field>
+          <Field label="Security deposit">
+            <input type="number" step="0.01" className={inputClass} value={form.security_deposit == null ? "" : Number(form.security_deposit)} onChange={(e) => set("security_deposit", e.target.value ? Number(e.target.value) : null)} />
+          </Field>
+          <Field label="Payment terms">
+            <input className={inputClass} value={String(form.payment_terms ?? "")} onChange={(e) => set("payment_terms", e.target.value)} />
+          </Field>
+          <Field label="Notice period">
+            <input className={inputClass} value={String(form.notice_period ?? "")} onChange={(e) => set("notice_period", e.target.value)} />
+          </Field>
           <Field label="Kahramaa account"><input className={inputClass} onChange={(e) => set("kahramaa_account", e.target.value)} /></Field>
           <Field label="Municipality ref"><input className={inputClass} onChange={(e) => set("municipality_ref", e.target.value)} /></Field>
         </div>
-        <Field label="Remarks"><textarea className={textareaClass} onChange={(e) => set("remarks", e.target.value)} /></Field>
+        <Field label="Remarks">
+          <textarea className={textareaClass} value={String(form.remarks ?? "")} onChange={(e) => set("remarks", e.target.value)} />
+        </Field>
         <div className="text-xs text-muted-foreground">
-          Posting this will archive any existing active agreement on this property.
+          {isAmend
+            ? "This keeps the current agreement's details as a starting point — change what's different (e.g. the rent or expiry) and post. The current agreement is archived, not overwritten, so its old terms stay on record."
+            : "Posting this will archive any existing active agreement on this property."}
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="h-9 rounded-md border border-border bg-card/60 px-3 text-sm">Cancel</button>
           <button type="submit" disabled={busy} className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
-            {busy ? "Saving…" : "Post"}
+            {busy ? "Saving…" : isAmend ? "Post amendment" : "Post"}
           </button>
         </div>
       </form>
@@ -464,34 +511,36 @@ type Floor = {
   floor_name: string | null;
   floor_type: string | null;
   status: string;
-  room_count: number;
+  unit_count: number;
   remarks: string | null;
 };
 
-type Room = {
+type Unit = {
   id: number;
   property_id: number;
   floor_id: number;
-  room_number: string;
-  room_name: string | null;
-  room_type: string;
-  capacity: number;
-  allowed_gender: string;
+  unit_number: string;
+  unit_name: string | null;
+  unit_type: string;
+  size: string | null;
+  is_shared_facility: boolean;
   has_bathroom: boolean;
   has_ac: boolean;
   occupancy_status: string;
   monthly_rent: number | null;
   remarks: string | null;
-  bed_counts: { total: number; occupied: number; empty: number; reserved: number; maintenance: number; blocked: number };
 };
 
-const ROOM_TYPES = ["shared", "single", "executive", "supervisor", "family", "temporary"];
-const GENDERS = ["any", "male", "female"];
+const UNIT_TYPES = [
+  "room", "flat_1bhk", "flat_2bhk", "floor", "villa",
+  "store", "shop", "cafeteria", "supermarket",
+  "kitchen", "bathroom", "play_area", "mess", "other",
+];
+const FACILITY_TYPES = new Set(["kitchen", "bathroom", "play_area", "mess"]);
 
-const ROOM_STATUS_TONE: Record<string, string> = {
+const UNIT_STATUS_TONE: Record<string, string> = {
   empty: "bg-muted text-muted-foreground",
-  partially_occupied: "bg-sky-500/10 text-sky-600",
-  full: "bg-emerald-500/10 text-emerald-600",
+  occupied: "bg-emerald-500/10 text-emerald-600",
   maintenance: "bg-amber-500/10 text-amber-600",
   blocked: "bg-rose-500/10 text-rose-600",
 };
@@ -545,7 +594,7 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
               <th className="py-2 px-3">Number</th>
               <th className="py-2 px-3">Name</th>
               <th className="py-2 px-3">Type</th>
-              <th className="py-2 px-3">Rooms</th>
+              <th className="py-2 px-3">Units</th>
               <th className="py-2 px-3">Status</th>
               <th className="py-2 px-3 text-right">Actions</th>
             </tr>
@@ -558,18 +607,18 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
                 <td className="py-2 px-3 font-mono">{f.floor_number}</td>
                 <td className="py-2 px-3">{f.floor_name ?? "—"}</td>
                 <td className="py-2 px-3 capitalize">{f.floor_type ?? "—"}</td>
-                <td className="py-2 px-3">{f.room_count}</td>
+                <td className="py-2 px-3">{f.unit_count}</td>
                 <td className="py-2 px-3">
                   <span className={"rounded-full px-2 py-0.5 text-xs " + (f.status === "active" ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground")}>
                     {f.status}
                   </span>
                 </td>
                 <td className="py-2 px-3 text-right">
-                  <Can perm="room.manage">
+                  <Can perm="unit.manage">
                     <button onClick={() => setRenumber(f)}
-                      disabled={f.room_count === 0}
-                      title={f.room_count === 0 ? "No rooms to renumber" : "Renumber all rooms on this floor"}
-                      aria-label={`Renumber rooms on floor ${f.floor_number}`}
+                      disabled={f.unit_count === 0}
+                      title={f.unit_count === 0 ? "No units to renumber" : "Renumber all units on this floor"}
+                      aria-label={`Renumber units on floor ${f.floor_number}`}
                       className="h-8 w-8 grid place-items-center rounded-md hover:bg-accent inline-block disabled:opacity-40 disabled:cursor-not-allowed">
                       <Hash className="h-3.5 w-3.5" />
                     </button>
@@ -597,7 +646,7 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
         onClose={() => setShowForm(false)}
         onSaved={async () => { setShowForm(false); await load(); }}
       />
-      <RenumberRoomsDialog
+      <RenumberUnitsDialog
         propertyId={propertyId}
         floor={renumber}
         onClose={() => setRenumber(null)}
@@ -607,9 +656,9 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
   );
 }
 
-type RenumberDiff = { room_id: number; old_room_number: string; new_room_number: string };
+type RenumberDiff = { unit_id: number; old_unit_number: string; new_unit_number: string };
 
-function RenumberRoomsDialog({ propertyId, floor, onClose, onDone }: {
+function RenumberUnitsDialog({ propertyId, floor, onClose, onDone }: {
   propertyId: number;
   floor: Floor | null;
   onClose: () => void;
@@ -635,7 +684,7 @@ function RenumberRoomsDialog({ propertyId, floor, onClose, onDone }: {
     const digits = raw.replace(/[^0-9]/g, "");
     floorSeq = digits || raw;
   }
-  const n = Math.max(0, floor.room_count);
+  const n = Math.max(0, floor.unit_count);
   const pad = Math.max(2, String(n).length);
   const sample = Array.from({ length: Math.min(n, 4) }, (_, i) =>
     `${prefix}${floorSeq}${String(i + 1).padStart(pad, "0")}`,
@@ -646,14 +695,14 @@ function RenumberRoomsDialog({ propertyId, floor, onClose, onDone }: {
     setError(null);
     try {
       const resp = await api.post(
-        `/properties/${propertyId}/floors/${floor.id}/renumber-rooms`,
-        { room_prefix: prefix, force },
+        `/properties/${propertyId}/floors/${floor.id}/renumber-units`,
+        { unit_prefix: prefix, force },
       );
       const data = resp.data?.data as { renamed: number; diff?: RenumberDiff[] };
       toast.success(
-        `${data.renamed} room${data.renamed === 1 ? "" : "s"} renumbered`,
+        `${data.renamed} unit${data.renamed === 1 ? "" : "s"} renumbered`,
         data.diff && data.diff.length
-          ? `${data.diff[0].old_room_number} → ${data.diff[0].new_room_number}${data.diff.length > 1 ? `, +${data.diff.length - 1} more` : ""}`
+          ? `${data.diff[0].old_unit_number} → ${data.diff[0].new_unit_number}${data.diff.length > 1 ? `, +${data.diff.length - 1} more` : ""}`
           : undefined,
       );
       onDone();
@@ -671,14 +720,13 @@ function RenumberRoomsDialog({ propertyId, floor, onClose, onDone }: {
   };
 
   return (
-    <Modal open={Boolean(floor)} onClose={onClose} title={`Renumber rooms — Floor ${floor.floor_number}`}>
+    <Modal open={Boolean(floor)} onClose={onClose} title={`Renumber units — Floor ${floor.floor_number}`}>
       <div className="space-y-4">
         <div className="text-sm text-muted-foreground">
-          Rewrites every room number on this floor using
+          Rewrites every unit number on this floor using
           {" "}<span className="font-mono">{`{prefix}${floorSeq}{nn}`}</span>.
-          Bed codes recompute automatically.
         </div>
-        <Field label="New room prefix">
+        <Field label="New unit prefix">
           <input
             autoFocus
             className={inputClass}
@@ -696,10 +744,10 @@ function RenumberRoomsDialog({ propertyId, floor, onClose, onDone }: {
           <div className="rounded-lg border-2 border-amber-500/60 bg-amber-500/5 p-3 space-y-2 text-sm">
             <div className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
               <AlertTriangle className="h-4 w-4" />
-              {forceRequired.occupied} bed{forceRequired.occupied === 1 ? "" : "s"} occupied on this floor
+              {forceRequired.occupied} unit{forceRequired.occupied === 1 ? "" : "s"} occupied on this floor
             </div>
             <div className="text-xs text-muted-foreground">
-              Renaming rooms also rewrites every bed_code in them — confirm to apply the change anyway. The audit log will record the force flag.
+              Occupied units keep their contracts — only the numbers change. The audit log records the force flag.
             </div>
           </div>
         )}
@@ -717,7 +765,7 @@ function RenumberRoomsDialog({ propertyId, floor, onClose, onDone }: {
           ) : (
             <button type="button" disabled={busy} onClick={() => submit(false)}
               className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
-              {busy ? "Renumbering…" : `Renumber ${n} room${n === 1 ? "" : "s"}`}
+              {busy ? "Renumbering…" : `Renumber ${n} unit${n === 1 ? "" : "s"}`}
             </button>
           )}
         </div>
@@ -778,25 +826,24 @@ function FloorDialog({ open, propertyId, editing, onClose, onSaved }: {
   );
 }
 
-function RoomsTab({ propertyId }: { propertyId: number }) {
+function UnitsTab({ propertyId }: { propertyId: number }) {
   const [floors, setFloors] = useState<Floor[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
+  const [units, setUnits] = useState<Unit[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeFloor, setActiveFloor] = useState<number | "all">("all");
   const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState<Room | null>(null);
+  const [editing, setEditing] = useState<Unit | null>(null);
   const [createInFloorId, setCreateInFloorId] = useState<number | null>(null);
-  const [openRoomId, setOpenRoomId] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
     try {
       const [f, r] = await Promise.all([
         api.get(`/properties/${propertyId}/floors`),
-        api.get(`/properties/${propertyId}/rooms`),
+        api.get(`/properties/${propertyId}/units`),
       ]);
       setFloors(f.data.data);
-      setRooms(r.data.data);
+      setUnits(r.data.data);
     } finally {
       setLoading(false);
     }
@@ -804,14 +851,25 @@ function RoomsTab({ propertyId }: { propertyId: number }) {
 
   useEffect(() => { load(); }, [propertyId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = activeFloor === "all" ? rooms : rooms.filter((r) => r.floor_id === activeFloor);
+  const filtered = activeFloor === "all" ? units : units.filter((r) => r.floor_id === activeFloor);
   const byFloor = (id: number) => floors.find((f) => f.id === id);
+
+  const remove = async (r: Unit) => {
+    if (!confirm(`Delete unit ${r.unit_number}?`)) return;
+    try {
+      await api.delete(`/units/${r.id}`);
+      toast.success(`Unit ${r.unit_number} deleted`);
+      await load();
+    } catch (err: unknown) {
+      toast.error("Delete failed", errorMessage(err));
+    }
+  };
 
   if (loading) return <div className="glass rounded-xl p-10 text-center text-muted-foreground">Loading…</div>;
   if (floors.length === 0) {
     return (
       <div className="glass rounded-xl p-10 text-center text-sm text-muted-foreground">
-        Add floors first, then create rooms under each floor.
+        Add floors first, then create units under each floor.
       </div>
     );
   }
@@ -826,69 +884,73 @@ function RoomsTab({ propertyId }: { propertyId: number }) {
         {floors.map((f) => (
           <button key={f.id} onClick={() => setActiveFloor(f.id)}
             className={"h-8 px-3 rounded-md border text-sm " + (activeFloor === f.id ? "bg-primary text-primary-foreground border-primary" : "border-border bg-card/60 hover:bg-accent")}>
-            Floor {f.floor_number}{f.floor_name ? ` · ${f.floor_name}` : ""} <span className="text-xs opacity-70">({f.room_count})</span>
+            Floor {f.floor_number}{f.floor_name ? ` · ${f.floor_name}` : ""} <span className="text-xs opacity-70">({f.unit_count})</span>
           </button>
         ))}
         <div className="ml-auto" />
-        <Can perm="room.manage">
+        <Can perm="unit.manage">
           <button onClick={() => {
               setEditing(null);
               setCreateInFloorId(activeFloor === "all" ? floors[0].id : activeFloor);
               setShowForm(true);
             }}
             className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-            <Plus className="h-4 w-4" /> New room
+            <Plus className="h-4 w-4" /> New unit
           </button>
         </Can>
       </div>
 
       {filtered.length === 0 ? (
-        <div className="glass rounded-xl p-10 text-center text-sm text-muted-foreground">No rooms on this floor yet.</div>
+        <div className="glass rounded-xl p-10 text-center text-sm text-muted-foreground">No units on this floor yet.</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {filtered.map((r) => {
             const f = byFloor(r.floor_id);
-            const open = openRoomId === r.id;
             return (
-              <div key={r.id} className="glass rounded-xl overflow-hidden">
-                <button onClick={() => setOpenRoomId(open ? null : r.id)} className="w-full text-left p-4 hover:bg-accent/30">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-semibold">Room {r.room_number}{r.room_name ? ` · ${r.room_name}` : ""}</div>
-                      <div className="text-xs text-muted-foreground">
-                        Floor {f?.floor_number} · {r.room_type} · capacity {r.capacity}
-                      </div>
+              <div key={r.id} className="glass rounded-xl p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold">
+                      {FACILITY_TYPES.has(r.unit_type) ? "" : "Unit "}{r.unit_number}{r.unit_name ? ` · ${r.unit_name}` : ""}
                     </div>
-                    <span className={"rounded-full px-2 py-0.5 text-xs " + ROOM_STATUS_TONE[r.occupancy_status]}>
-                      {r.occupancy_status.replace("_", " ")}
-                    </span>
+                    <div className="text-xs text-muted-foreground capitalize">
+                      Floor {f?.floor_number} · {r.unit_type.replaceAll("_", " ")}
+                      {FACILITY_TYPES.has(r.unit_type) && (r.is_shared_facility ? " · shared" : " · dedicated")}
+                    </div>
                   </div>
-                  <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
-                    <MiniStat label="Total" value={r.bed_counts.total} />
-                    <MiniStat label="Occ" value={r.bed_counts.occupied} />
-                    <MiniStat label="Empty" value={r.bed_counts.empty} />
-                    <MiniStat label="Maint" value={r.bed_counts.maintenance} />
+                  <span className={"rounded-full px-2 py-0.5 text-xs " + (UNIT_STATUS_TONE[r.occupancy_status] ?? "bg-muted text-muted-foreground")}>
+                    {r.occupancy_status.replace("_", " ")}
+                  </span>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {[
+                    r.size,
+                    r.monthly_rent != null ? `Rent ${r.monthly_rent.toLocaleString()}` : null,
+                    r.has_bathroom ? "Bathroom" : null,
+                    r.has_ac ? "AC" : null,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+                <Can perm="unit.manage">
+                  <div className="mt-3 flex justify-end gap-1">
+                    <button onClick={() => { setEditing(r); setCreateInFloorId(r.floor_id); setShowForm(true); }}
+                      aria-label={`Edit unit ${r.unit_number}`}
+                      className="h-8 w-8 grid place-items-center rounded-md hover:bg-accent">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button onClick={() => remove(r)}
+                      aria-label={`Delete unit ${r.unit_number}`}
+                      className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                  <div className="mt-2 flex gap-2 text-xs text-muted-foreground">
-                    {r.has_bathroom && <span>· Bathroom</span>}
-                    {r.has_ac && <span>· AC</span>}
-                    {r.allowed_gender !== "any" && <span>· {r.allowed_gender}</span>}
-                  </div>
-                </button>
-                {open && (
-                  <BedsPanel
-                    room={r}
-                    onChanged={load}
-                    onEditRoom={() => { setEditing(r); setCreateInFloorId(r.floor_id); setShowForm(true); }}
-                  />
-                )}
+                </Can>
               </div>
             );
           })}
         </div>
       )}
 
-      <RoomDialog
+      <UnitDialog
         open={showForm}
         floorId={createInFloorId}
         floors={floors}
@@ -900,94 +962,35 @@ function RoomsTab({ propertyId }: { propertyId: number }) {
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md bg-card/60 border border-border py-1">
-      <div className="text-sm font-semibold">{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-    </div>
-  );
-}
-
-// Phase 3: rooms are described by physical bed UNITS, not sleeping slots.
-// A "single" unit = 1 sleeping slot (one bed). A "bunk" unit = 2 sleeping
-// slots (bunk_lower + bunk_upper). Sleeping capacity = units * slots/unit.
-type UnitType = "single" | "bunk";
-const MAX_BED_UNITS = 12;
-const MAX_EDIT_CAPACITY = 24;
-
-function RoomDialog({ open, floorId, floors, editing, onClose, onSaved }: {
-  open: boolean; floorId: number | null; floors: Floor[]; editing: Room | null;
+function UnitDialog({ open, floorId, floors, editing, onClose, onSaved }: {
+  open: boolean; floorId: number | null; floors: Floor[]; editing: Unit | null;
   onClose: () => void; onSaved: () => void;
 }) {
   const [form, setForm] = useState<Record<string, unknown>>({});
-  const [autoCreateBeds, setAutoCreateBeds] = useState(true);
-  // Phase 7 follow-up: heterogeneous unit list. Each entry is the type of
-  // one physical bed frame. Order matters — the backend numbers units
-  // 1..N in this order, so the sequence drives bed numbers.
-  const [unitList, setUnitList] = useState<UnitType[]>(["single", "single"]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (editing) {
       setForm(editing as unknown as Record<string, unknown>);
-      setAutoCreateBeds(false);
     } else {
-      setForm({ room_type: "shared", allowed_gender: "any", has_bathroom: false, has_ac: true });
-      setAutoCreateBeds(true);
-      setUnitList(["single", "single"]);
+      setForm({ unit_type: "room", size: "", is_shared_facility: false, has_bathroom: false, has_ac: true });
     }
   }, [editing, open]);
 
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
-
-  // Derived counts for new-room mode.
-  const singleCount = unitList.filter((t) => t === "single").length;
-  const bunkCount = unitList.filter((t) => t === "bunk").length;
-  const derivedCapacity = unitList.reduce((sum, t) => sum + (t === "bunk" ? 2 : 1), 0);
-  const minEditCapacity = Math.max(1, editing?.bed_counts.total ?? 1);
-
-  const addUnit = (t: UnitType) => {
-    if (unitList.length >= MAX_BED_UNITS) return;
-    setUnitList((u) => [...u, t]);
-  };
-  const removeUnit = (idx: number) => {
-    setUnitList((u) => u.filter((_, i) => i !== idx));
-  };
+  const isFacility = FACILITY_TYPES.has(String(form.unit_type ?? ""));
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
       if (editing) {
-        await api.put(`/rooms/${editing.id}`, form);
-        toast.success(`Room ${editing.room_number} updated`);
+        await api.put(`/units/${editing.id}`, form);
+        toast.success(`Unit ${editing.unit_number} updated`);
       } else {
         if (!floorId) throw new Error("No floor selected");
-        if (autoCreateBeds && unitList.length === 0) {
-          throw new Error("Add at least one bed unit, or uncheck Auto-create");
-        }
-        const capacityForRoom = autoCreateBeds ? derivedCapacity : Math.max(1, derivedCapacity);
-        const roomPayload = { ...form, capacity: capacityForRoom };
-        const resp = await api.post(`/floors/${floorId}/rooms`, roomPayload);
-        const newRoom = resp.data?.data;
-        let bedsCreated = 0;
-        if (autoCreateBeds && newRoom?.id) {
-          const unitsArr = unitList.map((type) => ({ type }));
-          const bulkResp = await api.post(`/rooms/${newRoom.id}/beds/bulk`, { units: unitsArr });
-          bedsCreated = bulkResp.data?.data?.count ?? 0;
-        }
-        const roomLabel = newRoom?.room_number ?? "";
-        const detail = bedsCreated > 0
-          ? `${bedsCreated} bed${bedsCreated === 1 ? "" : "s"} added` +
-            (bunkCount > 0 || singleCount > 0
-              ? ` (${[
-                  singleCount > 0 ? `${singleCount} single` : null,
-                  bunkCount > 0 ? `${bunkCount} bunk` : null,
-                ].filter(Boolean).join(" + ")})`
-              : "")
-          : undefined;
-        toast.success(`Room ${roomLabel} created`, detail);
+        const resp = await api.post(`/floors/${floorId}/units`, form);
+        toast.success(`Unit ${resp.data?.data?.unit_number ?? ""} created`);
       }
       onSaved();
     } catch (err: unknown) {
@@ -996,7 +999,7 @@ function RoomDialog({ open, floorId, floors, editing, onClose, onSaved }: {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={editing ? `Edit room ${editing.room_number}` : "New room"}>
+    <Modal open={open} onClose={onClose} title={editing ? `Edit unit ${editing.unit_number}` : "New unit"}>
       <form onSubmit={save} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           {!editing && (
@@ -1006,24 +1009,29 @@ function RoomDialog({ open, floorId, floors, editing, onClose, onSaved }: {
               </select>
             </Field>
           )}
-          <Field label="Room number"><input required className={inputClass} value={String(form.room_number ?? "")} onChange={(e) => set("room_number", e.target.value)} /></Field>
-          <Field label="Name"><input className={inputClass} value={String(form.room_name ?? "")} onChange={(e) => set("room_name", e.target.value)} placeholder="Optional" /></Field>
+          <Field label="Unit number"><input required className={inputClass} value={String(form.unit_number ?? "")} onChange={(e) => set("unit_number", e.target.value)} /></Field>
+          <Field label="Name"><input className={inputClass} value={String(form.unit_name ?? "")} onChange={(e) => set("unit_name", e.target.value)} placeholder="Optional" /></Field>
           <Field label="Type">
-            <select className={selectClass} value={String(form.room_type ?? "shared")} onChange={(e) => set("room_type", e.target.value)}>
-              {ROOM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            <select className={selectClass} value={String(form.unit_type ?? "room")} onChange={(e) => set("unit_type", e.target.value)}>
+              {UNIT_TYPES.map((t) => <option key={t} value={t}>{t.replaceAll("_", " ")}</option>)}
             </select>
           </Field>
-          <Field label="Allowed gender">
-            <select className={selectClass} value={String(form.allowed_gender ?? "any")} onChange={(e) => set("allowed_gender", e.target.value)}>
-              {GENDERS.map((g) => <option key={g} value={g}>{g}</option>)}
-            </select>
+          <Field label="Size">
+            <input className={inputClass} value={String(form.size ?? "")} onChange={(e) => set("size", e.target.value)}
+              placeholder={["store", "shop", "supermarket", "cafeteria"].includes(String(form.unit_type)) ? "e.g. 450 Sqm" : "e.g. 4/4"} />
           </Field>
           <Field label="Monthly rent"><input type="number" step="0.01" className={inputClass} value={form.monthly_rent != null ? String(form.monthly_rent) : ""} onChange={(e) => set("monthly_rent", e.target.value ? Number(e.target.value) : null)} placeholder="Optional" /></Field>
-          <Field label="Amenities">
-            <div className="flex items-center gap-3 h-9">
+          <Field label="Amenities" span={2}>
+            <div className="flex items-center gap-4 h-9 flex-wrap">
+              {isFacility && (
+                <label className="inline-flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" checked={Boolean(form.is_shared_facility)} onChange={(e) => set("is_shared_facility", e.target.checked)} />
+                  Shared facility (common to the property)
+                </label>
+              )}
               <label className="inline-flex items-center gap-1.5 text-sm">
                 <input type="checkbox" checked={Boolean(form.has_bathroom)} onChange={(e) => set("has_bathroom", e.target.checked)} />
-                Bathroom
+                Attached bathroom
               </label>
               <label className="inline-flex items-center gap-1.5 text-sm">
                 <input type="checkbox" checked={Boolean(form.has_ac)} onChange={(e) => set("has_ac", e.target.checked)} />
@@ -1033,108 +1041,6 @@ function RoomDialog({ open, floorId, floors, editing, onClose, onSaved }: {
           </Field>
         </div>
 
-        {editing ? (
-          // Edit mode: bed structure already exists; just allow tweaking the
-          // total sleeping capacity within the no-shrink-below-bed-count guard.
-          <Field label="Sleeping capacity (people)">
-            <input
-              type="number"
-              min={minEditCapacity}
-              max={MAX_EDIT_CAPACITY}
-              className={inputClass}
-              value={Number(form.capacity ?? editing.capacity)}
-              onChange={(e) => set("capacity", Math.max(minEditCapacity, Number(e.target.value) || minEditCapacity))}
-            />
-            <div className="text-[11px] text-muted-foreground mt-1">
-              Can&apos;t be lower than the current bed count ({editing.bed_counts.total}). Use the room&apos;s bed list to add/remove beds.
-            </div>
-          </Field>
-        ) : (
-          <div className="rounded-lg border border-border bg-card/40 p-3 space-y-3">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <div className="text-sm font-medium">Bed frames in this room</div>
-                <div className="text-xs text-muted-foreground">
-                  Mix single and bunk frames freely. Sleeping capacity updates as you go.
-                </div>
-              </div>
-              <div className="text-sm">
-                <span className="font-semibold">{derivedCapacity}</span>
-                <span className="text-muted-foreground"> sleeping slot{derivedCapacity === 1 ? "" : "s"}</span>
-                {" · "}
-                <span className="font-mono text-xs">{unitList.length} frame{unitList.length === 1 ? "" : "s"}</span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => addUnit("single")}
-                disabled={unitList.length >= MAX_BED_UNITS}
-                className="h-8 inline-flex items-center gap-1 rounded-md border border-border bg-card/60 px-3 text-xs hover:bg-accent disabled:opacity-50"
-              >
-                <Plus className="h-3 w-3" /> Add single
-              </button>
-              <button
-                type="button"
-                onClick={() => addUnit("bunk")}
-                disabled={unitList.length >= MAX_BED_UNITS}
-                className="h-8 inline-flex items-center gap-1 rounded-md border border-border bg-card/60 px-3 text-xs hover:bg-accent disabled:opacity-50"
-              >
-                <Plus className="h-3 w-3" /> Add bunk
-              </button>
-              {unitList.length >= MAX_BED_UNITS && (
-                <div className="text-xs text-muted-foreground">Cap: {MAX_BED_UNITS} frames per room</div>
-              )}
-            </div>
-
-            {unitList.length === 0 ? (
-              <div className="text-xs text-muted-foreground italic rounded-md border border-dashed border-border px-3 py-3 text-center">
-                No bed frames yet. Add some — or uncheck &ldquo;Auto-create&rdquo; below and add beds manually after creating the room.
-              </div>
-            ) : (
-              <ul className="space-y-1.5">
-                {unitList.map((t, idx) => (
-                  <li key={idx} className="flex items-center justify-between gap-2 rounded-md border border-border bg-background/40 px-3 py-1.5 text-sm">
-                    <span className="inline-flex items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground w-5 text-right">{idx + 1}.</span>
-                      <span className="capitalize">{t}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {t === "bunk"
-                          ? <>(2 beds — <span className="font-mono">{idx + 1}L</span>, <span className="font-mono">{idx + 1}U</span>)</>
-                          : <>(<span className="font-mono">{idx + 1}</span>)</>}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => removeUnit(idx)}
-                      aria-label={`Remove unit ${idx + 1}`}
-                      className="h-7 w-7 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <label className="inline-flex items-start gap-2 text-sm cursor-pointer pt-1 border-t border-border">
-              <input
-                type="checkbox"
-                checked={autoCreateBeds}
-                onChange={(e) => setAutoCreateBeds(e.target.checked)}
-                className="mt-1"
-              />
-              <span>
-                <span className="font-medium">Auto-create the beds with the room</span>
-                <span className="block text-xs text-muted-foreground">
-                  Posts the unit list to <span className="font-mono">/rooms/&#123;id&#125;/beds/bulk</span> right after the room is created. Uncheck to create the room only.
-                </span>
-              </span>
-            </label>
-          </div>
-        )}
-
         <Field label="Remarks">
           <textarea className={textareaClass} value={String(form.remarks ?? "")} onChange={(e) => set("remarks", e.target.value)} />
         </Field>
@@ -1142,16 +1048,10 @@ function RoomDialog({ open, floorId, floors, editing, onClose, onSaved }: {
           <button type="button" onClick={onClose} className="h-9 rounded-md border border-border bg-card/60 px-3 text-sm">Cancel</button>
           <button
             type="submit"
-            disabled={busy || (!editing && autoCreateBeds && unitList.length === 0)}
+            disabled={busy}
             className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
           >
-            {busy
-              ? "Saving…"
-              : editing
-                ? "Save changes"
-                : autoCreateBeds
-                  ? `Create room + ${derivedCapacity} bed${derivedCapacity === 1 ? "" : "s"}`
-                  : "Create room"}
+            {busy ? "Saving…" : editing ? "Save changes" : "Create unit"}
           </button>
         </div>
       </form>
@@ -1159,14 +1059,11 @@ function RoomDialog({ open, floorId, floors, editing, onClose, onSaved }: {
   );
 }
 
-// BedsPanel was extracted to components/beds-panel.tsx in Phase 6 so it
-// could be unit-tested in isolation. The import is at the top of this file.
-
 const STATUS_OPTIONS: { value: string; label: string; tone: string; help: string }[] = [
-  { value: "active",      label: "Active",       tone: "border-emerald-500 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400", help: "Property is operational. New assignments are allowed." },
-  { value: "on_hold",     label: "On hold",      tone: "border-amber-500 bg-amber-500/5 text-amber-700 dark:text-amber-400",          help: "Temporarily paused. New assignments blocked. Existing residents stay until you transfer them." },
-  { value: "maintenance", label: "Maintenance",  tone: "border-sky-500 bg-sky-500/5 text-sky-700 dark:text-sky-400",                  help: "Property is under repair. New assignments blocked." },
-  { value: "inactive",    label: "Inactive",     tone: "border-rose-500 bg-rose-500/5 text-rose-700 dark:text-rose-400",              help: "Permanently retired (lease ended, sold, demolished). New assignments blocked." },
+  { value: "active",      label: "Active",       tone: "border-emerald-500 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400", help: "Property is operational. New contracts are allowed." },
+  { value: "on_hold",     label: "On hold",      tone: "border-amber-500 bg-amber-500/5 text-amber-700 dark:text-amber-400",          help: "Temporarily paused. New contracts blocked. Existing occupants stay until released." },
+  { value: "maintenance", label: "Maintenance",  tone: "border-sky-500 bg-sky-500/5 text-sky-700 dark:text-sky-400",                  help: "Property is under repair. New contracts blocked." },
+  { value: "inactive",    label: "Inactive",     tone: "border-rose-500 bg-rose-500/5 text-rose-700 dark:text-rose-400",              help: "Permanently retired (lease ended, handed back, demolished). New contracts blocked." },
 ];
 
 const REASON_OPTIONS = [
@@ -1181,8 +1078,7 @@ const REASON_OPTIONS = [
 type BlockedDetails = {
   blocked: true;
   occupied: number;
-  reserved: number;
-  sample_employees: { employee_id: number; employee_code: string; employee_name: string; bed_id: number; bed_code: string }[];
+  sample_units: { unit_id: number; unit_number: string; unit_type: string }[];
 };
 
 function PropertyStatusModal({ open, property, onClose, onChanged }: {
@@ -1192,7 +1088,7 @@ function PropertyStatusModal({ open, property, onClose, onChanged }: {
   const [reason, setReason] = useState<string>("agreement_expired");
   const [remarks, setRemarks] = useState<string>("");
   const [busy, setBusy] = useState(false);
-  const [snapshot, setSnapshot] = useState<{ occupied: number; reserved: number } | null>(null);
+  const [snapshot, setSnapshot] = useState<{ occupied: number } | null>(null);
   const [blocked, setBlocked] = useState<BlockedDetails | null>(null);
 
   useEffect(() => {
@@ -1240,9 +1136,7 @@ function PropertyStatusModal({ open, property, onClose, onChanged }: {
           {snapshot && (
             <>
               {" · "}
-              <span className="font-medium text-foreground">{snapshot.occupied}</span> occupied bed{snapshot.occupied === 1 ? "" : "s"}
-              {" · "}
-              <span className="font-medium text-foreground">{snapshot.reserved}</span> reserved
+              <span className="font-medium text-foreground">{snapshot.occupied}</span> occupied unit{snapshot.occupied === 1 ? "" : "s"}
             </>
           )}
         </div>
@@ -1290,25 +1184,21 @@ function PropertyStatusModal({ open, property, onClose, onChanged }: {
           <div className="rounded-lg border-2 border-rose-500/60 bg-rose-500/5 p-3 space-y-2">
             <div className="flex items-center gap-2 text-rose-600 text-sm font-medium">
               <AlertTriangle className="h-4 w-4" />
-              Cannot change status — {blocked.occupied} bed{blocked.occupied === 1 ? "" : "s"} occupied, {blocked.reserved} reserved
+              Cannot change status — {blocked.occupied} unit{blocked.occupied === 1 ? "" : "s"} occupied
             </div>
             <div className="text-xs text-muted-foreground">
-              Transfer or cancel these assignments first, then try again.
+              Release or cancel the contracts on these units first, then try again.
             </div>
-            {blocked.sample_employees.length > 0 && (
+            {blocked.sample_units.length > 0 && (
               <ul className="text-xs space-y-1">
-                {blocked.sample_employees.map((s) => (
-                  <li key={s.employee_id} className="flex items-center justify-between gap-2 rounded-md bg-card/60 px-2 py-1">
-                    <span>
-                      <Link href={`/employees/${s.employee_id}`} className="font-medium hover:text-primary">{s.employee_name}</Link>
-                      {" "}<span className="font-mono text-muted-foreground">({s.employee_code})</span>
-                      {" "}— bed <span className="font-mono">{s.bed_code}</span>
-                    </span>
-                    <Link href={`/transactions/transfers/new`} className="text-primary hover:underline">Transfer →</Link>
+                {blocked.sample_units.map((s) => (
+                  <li key={s.unit_id} className="rounded-md bg-card/60 px-2 py-1">
+                    Unit <span className="font-mono">{s.unit_number}</span>
+                    {" "}<span className="text-muted-foreground capitalize">({s.unit_type.replaceAll("_", " ")})</span>
                   </li>
                 ))}
-                {blocked.occupied > blocked.sample_employees.length && (
-                  <li className="text-muted-foreground">…and {blocked.occupied - blocked.sample_employees.length} more.</li>
+                {blocked.occupied > blocked.sample_units.length && (
+                  <li className="text-muted-foreground">…and {blocked.occupied - blocked.sample_units.length} more.</li>
                 )}
               </ul>
             )}
@@ -1330,10 +1220,116 @@ function PropertyStatusModal({ open, property, onClose, onChanged }: {
   );
 }
 
+const EDIT_OWNERSHIP = ["rented", "company_owned", "temporary"];
+
+function EditPropertyDialog({ open, property, onClose, onSaved }: {
+  open: boolean; property: Property; onClose: () => void; onSaved: () => void;
+}) {
+  const { types: propertyTypes } = usePropertyTypes();
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  // The property's current type may since have been deactivated — keep it
+  // selectable (and visibly correct) on its own edit form even though it
+  // no longer appears for new properties.
+  const typeOptions = propertyTypes.some((t) => t.code === property.property_type)
+    ? propertyTypes
+    : [...propertyTypes, { id: -1, code: property.property_type, name: `${property.property_type.replaceAll("_", " ")} (inactive)`, is_active: false }];
+
+  useEffect(() => {
+    if (!open) return;
+    setForm({
+      name: property.name,
+      property_type: property.property_type,
+      building_number: property.building_number ?? "",
+      zone: property.zone ?? "",
+      street: property.street ?? "",
+      area: property.area ?? "",
+      city: property.city ?? "",
+      map_link: property.map_link ?? "",
+      ownership_type: property.ownership_type,
+      managed_by: property.managed_by ?? "",
+      remarks: property.remarks ?? "",
+    });
+  }, [open, property]);
+
+  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload: Record<string, string | null> = {};
+      for (const [k, v] of Object.entries(form)) payload[k] = v === "" ? null : v;
+      await api.put(`/properties/${property.id}`, payload);
+      toast.success("Property updated");
+      onSaved();
+    } catch (err: unknown) {
+      toast.error("Save failed", errorMessage(err));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Edit — ${property.name}`} size="lg">
+      <form onSubmit={submit} className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Name" span={2}>
+            <input required className={inputClass} value={form.name ?? ""}
+              onChange={(e) => set("name", e.target.value)} />
+          </Field>
+          <Field label="Type">
+            <select className={selectClass} value={form.property_type ?? ""} onChange={(e) => set("property_type", e.target.value)}>
+              {typeOptions.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Ownership">
+            <select className={selectClass} value={form.ownership_type ?? "rented"} onChange={(e) => set("ownership_type", e.target.value)}>
+              {EDIT_OWNERSHIP.map((o) => <option key={o} value={o}>{o.replaceAll("_", " ")}</option>)}
+            </select>
+          </Field>
+          <Field label="Building number">
+            <input className={inputClass} value={form.building_number ?? ""} onChange={(e) => set("building_number", e.target.value)} />
+          </Field>
+          <Field label="Zone">
+            <input className={inputClass} value={form.zone ?? ""} onChange={(e) => set("zone", e.target.value)} />
+          </Field>
+          <Field label="Street">
+            <input className={inputClass} value={form.street ?? ""} onChange={(e) => set("street", e.target.value)} />
+          </Field>
+          <Field label="Area">
+            <input className={inputClass} value={form.area ?? ""} onChange={(e) => set("area", e.target.value)} />
+          </Field>
+          <Field label="City">
+            <input className={inputClass} value={form.city ?? ""} onChange={(e) => set("city", e.target.value)} />
+          </Field>
+          <Field label="Google map link" span={2}>
+            <input className={inputClass} value={form.map_link ?? ""} onChange={(e) => set("map_link", e.target.value)} />
+          </Field>
+          <Field label="Managed by" span={2}>
+            <input className={inputClass} value={form.managed_by ?? ""} onChange={(e) => set("managed_by", e.target.value)} />
+          </Field>
+        </div>
+        <Field label="Remarks">
+          <textarea className={textareaClass} value={form.remarks ?? ""} onChange={(e) => set("remarks", e.target.value)} />
+        </Field>
+        <div className="text-xs text-muted-foreground">
+          Status and agreement terms are edited separately (Change status / Agreement tab). This form is the property&apos;s own details only.
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="h-9 rounded-md border border-border bg-card/60 px-3 text-sm">Cancel</button>
+          <button type="submit" disabled={busy}
+            className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
+            {busy ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function statusBadgeClass(s: string): string {
   if (s === "active") return "bg-emerald-500/10 text-emerald-600";
   if (s === "on_hold") return "bg-amber-500/10 text-amber-600";
   if (s === "maintenance") return "bg-sky-500/10 text-sky-600";
   return "bg-muted text-muted-foreground";
 }
-

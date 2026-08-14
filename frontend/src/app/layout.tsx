@@ -9,15 +9,15 @@ import { Toaster } from "@/components/ui/toast";
 
 export const metadata: Metadata = {
   title: {
-    default: "PUG Accommodation Portal",
-    template: "%s · PUG Accommodation",
+    default: "GreenTech Real Estate Portal",
+    template: "%s · GreenTech Real Estate",
   },
-  description: "Centralized employee accommodation management for Paris United Group",
+  description: "Property, contract and rent control for GreenTech real estate division",
   manifest: "/manifest.webmanifest",
-  applicationName: "PUG Accommodation",
+  applicationName: "GreenTech Real Estate",
   appleWebApp: {
     capable: true,
-    title: "PUG Housing",
+    title: "GreenTech Portal",
     statusBarStyle: "black-translucent",
   },
   // Mirror the Apple PWA capability hint with the standard one so we don't

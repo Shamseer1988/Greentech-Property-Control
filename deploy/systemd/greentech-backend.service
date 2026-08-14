@@ -1,0 +1,27 @@
+[Unit]
+Description=GreenTech Real Estate Portal — Flask backend (waitress)
+After=network.target postgresql.service 
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=greentech
+Group=greentech
+WorkingDirectory=/opt/greentech/backend
+# WAITRESS_LISTEN / WAITRESS_THREADS come from .env; the sh -c wrapper
+# applies safe fallbacks (loopback, 8 threads) when they are unset.
+EnvironmentFile=/opt/greentech/backend/.env
+ExecStart=/bin/sh -c 'exec /opt/greentech/backend/.venv/bin/waitress-serve --listen=${WAITRESS_LISTEN:-127.0.0.1:5000} --threads=${WAITRESS_THREADS:-8} wsgi:app'
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

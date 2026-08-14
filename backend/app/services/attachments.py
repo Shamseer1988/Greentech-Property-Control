@@ -123,7 +123,22 @@ def store_file(
     category: str | None,
     actor_id: int | None,
     remarks: str | None = None,
+    doc_number: str | None = None,
+    issue_date=None,
+    expiry_date=None,
+    trusted_source: bool = False,
 ) -> Attachment:
+    """`trusted_source=True` skips the content-sniff (step 1) — for
+    bytes the server just generated itself (e.g. a python-docx-built
+    agreement), not a user upload. That sniff exists to catch a
+    mislabeled/malicious *user* file; it doesn't apply to our own
+    trusted library output, and in practice python-docx's zip layout
+    isn't always recognised as the specific OOXML wordprocessingml MIME
+    by libmagic on every platform (it can fall back to
+    `application/octet-stream` even though the bytes are a perfectly
+    valid .docx) — confirmed by testing against a real Word-authored
+    file, which sniffs correctly, versus a python-docx-generated one,
+    which doesn't. The byte-cap and extension checks still apply."""
     if not file or not file.filename:
         raise UploadError("No file provided")
 
@@ -133,14 +148,19 @@ def store_file(
     if rule is None:
         raise UploadError(f"File type '.{ext or '?'}' is not allowed")
 
-    # 1. Sniff the actual content.
-    sniffed = _sniff_mime(file.stream)
-    if sniffed not in rule["mimes"]:
-        raise UploadError(
-            f"Content does not match extension '.{ext}' "
-            f"(sniffed '{sniffed or 'unknown'}', expected one of "
-            f"{sorted(rule['mimes'])})"
-        )
+    # 1. Sniff the actual content (skipped for our own trusted output —
+    # the caller's own declared content_type is trustworthy there since
+    # nothing about the bytes came from outside the server).
+    if trusted_source:
+        sniffed = file.content_type or next(iter(rule["mimes"]))
+    else:
+        sniffed = _sniff_mime(file.stream)
+        if sniffed not in rule["mimes"]:
+            raise UploadError(
+                f"Content does not match extension '.{ext}' "
+                f"(sniffed '{sniffed or 'unknown'}', expected one of "
+                f"{sorted(rule['mimes'])})"
+            )
 
     # 2. Per-type byte cap. We re-read to count without loading the whole
     # file twice on disk: tell()-after-seek-end is cheap on FileStorage.
@@ -181,6 +201,9 @@ def store_file(
         mime_type=sniffed,  # trust the sniff, never the client header
         size_bytes=final_size,
         path=os.path.join(sub, stored_name).replace(os.sep, "/"),
+        doc_number=doc_number,
+        issue_date=issue_date,
+        expiry_date=expiry_date,
         remarks=remarks,
         created_by=actor_id,
         updated_by=actor_id,
@@ -200,3 +223,20 @@ def delete_file(attachment: Attachment) -> None:
     except OSError:
         pass
     db.session.delete(attachment)
+
+
+def company_logo_path() -> str | None:
+    """Local file path of the current company logo, or None if there
+    isn't one / the file is missing — used by agreement_documents.py to
+    embed the logo in a generated .docx header. Mirrors the lookup in
+    routes/settings.py::_logo_attachment()."""
+    att = (
+        Attachment.query
+        .filter_by(entity_type="company_logo", entity_id="current")
+        .order_by(Attachment.id.desc())
+        .first()
+    )
+    if att is None:
+        return None
+    path = absolute_path(att)
+    return path if os.path.exists(path) else None

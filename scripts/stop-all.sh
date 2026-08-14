@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stop every process started by start-all.sh.
 set -u
-PIDFILE="/tmp/housing-pids"
+PIDFILE="/tmp/greentech-pids"
 
 if [[ -f "$PIDFILE" ]]; then
     while read -r name pid; do

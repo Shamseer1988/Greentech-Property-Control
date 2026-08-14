@@ -75,8 +75,8 @@ def update_floor(floor_id: int):
 @require_permission("floor.manage")
 def delete_floor(floor_id: int):
     floor = Floor.query.get_or_404(floor_id)
-    if floor.rooms:
-        return error_response("Cannot delete a floor that has rooms", 409)
+    if floor.units:
+        return error_response("Cannot delete a floor that has units", 409)
     actor = current_user()
     audit.record(user=actor, action="delete", module="floor",
                  entity_type="floor", entity_id=floor.id, old_value=floor.to_dict())

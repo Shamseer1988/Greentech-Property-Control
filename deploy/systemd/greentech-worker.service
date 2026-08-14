@@ -1,0 +1,24 @@
+[Unit]
+Description=GreenTech Real Estate Portal — Celery worker
+After=network.target greentech-backend.service
+Wants=
+
+[Service]
+Type=simple
+User=greentech
+Group=greentech
+WorkingDirectory=/opt/greentech/backend
+EnvironmentFile=/opt/greentech/backend/.env
+ExecStart=/opt/greentech/backend/.venv/bin/celery -A celery_worker.celery worker --loglevel=info
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

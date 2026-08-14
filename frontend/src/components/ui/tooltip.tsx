@@ -40,7 +40,7 @@ export function Tooltip({
               // token, so the old `bg-popover` resolved to nothing and
               // the tooltip rendered transparent / unreadable. Use the
               // card token (opaque) and bump padding + text to make
-              // employee/bed details legible at hover.
+              // unit/contract details legible at hover.
               "z-50 max-w-sm rounded-lg border border-border bg-card text-card-foreground " +
               "shadow-xl px-3.5 py-2.5 text-sm leading-snug " +
               "data-[state=delayed-open]:animate-in data-[state=closed]:animate-out " +

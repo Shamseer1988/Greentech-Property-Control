@@ -36,7 +36,7 @@ def test_bulk_update_settings(client, auth_headers):
     resp = client.put(
         "/api/v1/settings", headers=auth_headers,
         json={"settings": {
-            "company.name": "PUG Operations",
+            "company.name": "GreenTech Operations",
             "ui.accent_color": "violet",
             "import.max_rows": "2500",   # string should be coerced to int
             "alerts.email_enabled": "true",
@@ -45,7 +45,7 @@ def test_bulk_update_settings(client, auth_headers):
     assert resp.status_code == 200
     listed = client.get("/api/v1/settings", headers=auth_headers).get_json()["data"]
     by_key = {s["key"]: s for s in listed}
-    assert by_key["company.name"]["value"] == "PUG Operations"
+    assert by_key["company.name"]["value"] == "GreenTech Operations"
     assert by_key["ui.accent_color"]["value"] == "violet"
     assert by_key["import.max_rows"]["value"] == 2500
     assert by_key["alerts.email_enabled"]["value"] is True

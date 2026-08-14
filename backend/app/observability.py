@@ -13,7 +13,7 @@ import structlog
 from flask import Flask, abort, g, request
 
 
-log = structlog.get_logger("pug")
+log = structlog.get_logger("greentech")
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +114,41 @@ def init_logging(app: Flask) -> None:
 # ---------------------------------------------------------------------------
 # Sentry
 # ---------------------------------------------------------------------------
+def _alert_telegram_on_error(event: dict, hint: dict) -> dict:
+    """Sentry before_send hook — fires a Telegram alert for every error-
+    level event Sentry is about to accept, then always returns the event
+    unchanged so Sentry still records it regardless of whether the alert
+    itself succeeds.
+
+    Dispatches through a Celery task (app.tasks.sentry_alerts) rather
+    than calling telegram_service directly — this hook runs inside the
+    request that just failed, and that request's DB session may be part
+    of what's broken, so a synchronous DB-writing call here could turn
+    one error into two. The whole thing is additionally wrapped in its
+    own try/except: alerting must never be the reason Sentry itself
+    fails to capture an event."""
+    try:
+        level = event.get("level")
+        if level not in ("error", "fatal"):
+            return event
+        exc_info = hint.get("exc_info") if hint else None
+        if exc_info:
+            exc_type = exc_info[0].__name__ if exc_info[0] else "Error"
+            exc_message = str(exc_info[1]) if len(exc_info) > 1 else ""
+        else:
+            exc_type = event.get("exception", {}).get("values", [{}])[0].get("type", "Error")
+            exc_message = event.get("message") or ""
+        text = f"⚠ {exc_type}: {exc_message}"[:500]
+        fingerprint = event.get("fingerprint") or [event.get("event_id", "")]
+        dedupe_key = f"sentry:{'|'.join(str(f) for f in fingerprint)}"
+
+        from .tasks.sentry_alerts import send_sentry_alert
+        send_sentry_alert.delay(text, dedupe_key)
+    except Exception:
+        pass  # never let alerting stop Sentry from receiving the event
+    return event
+
+
 def init_sentry(app: Flask) -> None:
     """Initialise Sentry if SENTRY_DSN is set. No-op otherwise.
 
@@ -132,6 +167,7 @@ def init_sentry(app: Flask) -> None:
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.05")),
         send_default_pii=False,
         integrations=[FlaskIntegration(), SqlalchemyIntegration()],
+        before_send=_alert_telegram_on_error,
     )
 
 
@@ -152,10 +188,10 @@ def init_metrics(app: Flask) -> None:
     # prometheus_client uses a process-global registry, so subsequent
     # create_app() calls (test suite, waitress reload) collide on the
     # already-registered metric. Skip if it's been added.
-    if "pug_app_info" not in {
+    if "greentech_app_info" not in {
         getattr(c, "_name", None) for c in REGISTRY._names_to_collectors.values()
     }:
-        metrics.info("pug_app_info", "Application info",
+        metrics.info("greentech_app_info", "Application info",
                      version=app.config.get("VERSION", "1.0.0"))
 
     @app.route("/metrics")

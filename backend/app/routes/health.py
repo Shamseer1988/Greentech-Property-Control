@@ -12,7 +12,7 @@ def health():
     return success_response(
         data={
             "status": "healthy",
-            "service": "pug-accommodation-api",
+            "service": "greentech-realestate-api",
             "time": datetime.now(timezone.utc).isoformat(),
         }
     )

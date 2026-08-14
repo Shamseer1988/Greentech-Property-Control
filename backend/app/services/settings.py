@@ -13,6 +13,9 @@ from typing import Any
 
 from ..extensions import db
 from ..models import SystemSetting
+from .cache import cache_get, cache_set, cache_delete
+
+_CACHE_TTL = 30  # seconds — short enough that a stale read self-heals fast
 
 
 # Category ordering controls how tabs are sorted in the UI.
@@ -33,13 +36,16 @@ CATEGORY_LABEL = {
     "security": "Security",
     "backup": "Backup",
     "audit": "Audit",
+    "notifications": "Notification rules",
+    "telegram": "Telegram",
+    "ai": "AI assistant",
 }
 
 
 DEFAULTS: list[dict] = [
     # ---------- Company ----------
     {"key": "company.name", "category": "company", "type": "string",
-     "label": "Company name", "value": "Paris United Group",
+     "label": "Company name", "value": "GreenTech Real Estate",
      "description": "Displayed in the topbar and on every report header."},
     {"key": "company.legal_name", "category": "company", "type": "string",
      "label": "Legal name", "value": "",
@@ -54,6 +60,35 @@ DEFAULTS: list[dict] = [
     {"key": "company.logo_url", "category": "company", "type": "string",
      "label": "Logo URL", "value": "",
      "description": "Public URL to a square logo image; shown in the topbar."},
+    {"key": "company.currency", "category": "company", "type": "select",
+     "label": "Currency", "value": "QAR",
+     "options": [
+         {"value": "QAR", "label": "Qatari Riyal (QAR)"},
+         {"value": "AED", "label": "UAE Dirham (AED)"},
+         {"value": "SAR", "label": "Saudi Riyal (SAR)"},
+         {"value": "USD", "label": "US Dollar (USD)"},
+     ],
+     "description": "Currency code used across amounts, vouchers and reports."},
+    {"key": "company.fiscal_year_start_month", "category": "company", "type": "int",
+     "label": "Fiscal year start month", "value": 1,
+     "description": "1 = January. Used by yearly reports and period locking."},
+    {"key": "company.name_ar", "category": "company", "type": "string",
+     "label": "Company name (Arabic)", "value": "",
+     "description": "Arabic legal name — printed on the Arabic side of generated agreements."},
+    {"key": "company.cr_number", "category": "company", "type": "string",
+     "label": "Commercial registration no.", "value": "",
+     "description": "The company's own CR/establishment registration number."},
+    {"key": "company.signatory_name", "category": "company", "type": "string",
+     "label": "Signatory name", "value": "",
+     "description": "Person authorized to sign agreements on the company's behalf."},
+    {"key": "company.signatory_name_ar", "category": "company", "type": "string",
+     "label": "Signatory name (Arabic)", "value": ""},
+    {"key": "company.signatory_id_number", "category": "company", "type": "string",
+     "label": "Signatory ID number", "value": "",
+     "description": "The signatory's personal QID — distinct from the company's CR number."},
+    {"key": "company.signatory_title", "category": "company", "type": "string",
+     "label": "Signatory title", "value": "",
+     "description": "e.g. General Manager."},
 
     # ---------- Property defaults ----------
     {"key": "property.default_ownership", "category": "property", "type": "select",
@@ -63,34 +98,34 @@ DEFAULTS: list[dict] = [
          {"value": "company_owned", "label": "Company owned"},
          {"value": "temporary", "label": "Temporary"},
      ]},
-    {"key": "property.default_multi_division", "category": "property", "type": "bool",
-     "label": "Allow multi-division by default", "value": True,
-     "description": "New properties default to allowing employees from multiple divisions."},
-
     # ---------- Numbering ----------
     {"key": "numbering.property.prefix", "category": "numbering", "type": "string",
      "label": "Property code prefix", "value": "PROP",
      "help": "Used for auto-generated property codes such as PROP-0001."},
     {"key": "numbering.landlord.prefix", "category": "numbering", "type": "string",
      "label": "Landlord code prefix", "value": "LL"},
-    {"key": "numbering.division.prefix", "category": "numbering", "type": "string",
-     "label": "Division code prefix", "value": "DIV"},
-    {"key": "numbering.employee.prefix", "category": "numbering", "type": "string",
-     "label": "Employee code prefix", "value": "EMP"},
+    {"key": "numbering.client.prefix", "category": "numbering", "type": "string",
+     "label": "Client code prefix", "value": "CL"},
+    {"key": "contract.default_cheque_count", "category": "property", "type": "int",
+     "label": "Cheques per annual contract", "value": 12,
+     "description": "How many rent cheques the PDC grid pre-fills for a one-year agreement."},
 
-    # ---------- Approval workflow (Phase 11) ----------
-    {"key": "approval.assignment.required", "category": "approval", "type": "bool",
-     "label": "Require approval — assignments", "value": False,
-     "description": "New accommodation assignments are created as pending until approved."},
-    {"key": "approval.transfer.required", "category": "approval", "type": "bool",
-     "label": "Require approval — transfers", "value": False,
-     "description": "Bed / room / property transfers require approval before execution."},
-    {"key": "approval.cancellation.required", "category": "approval", "type": "bool",
-     "label": "Require approval — cancellations", "value": False,
-     "description": "Accommodation cancellations require approval before the bed is released."},
+    # ---------- Approval workflow ----------
+    # Each toggle gates one action. When it is on the action is queued
+    # instead of applied, and replayed on approval — see
+    # services/approvals.py.
     {"key": "approval.renewal.required", "category": "approval", "type": "bool",
      "label": "Require approval — landlord renewals", "value": False,
      "description": "Landlord renewals are held until approved; old agreement is not archived early."},
+    {"key": "approval.contract_cancellation.required", "category": "approval", "type": "bool",
+     "label": "Require approval — contract cancellation", "value": False,
+     "description": "Cancelling a client contract waits for an approver before units are released."},
+    {"key": "approval.rent_reduction.required", "category": "approval", "type": "bool",
+     "label": "Require approval — rent reduction", "value": False,
+     "description": "Lowering a contract's rent waits for an approver. Rent increases are not gated."},
+    {"key": "approval.receipt_void.required", "category": "approval", "type": "bool",
+     "label": "Require approval — receipt void", "value": False,
+     "description": "Voiding a collection receipt waits for an approver; the receipt stays posted until then."},
 
     # ---------- Alerts ----------
     {"key": "alerts.reminder_days", "category": "alerts", "type": "string",
@@ -120,9 +155,64 @@ DEFAULTS: list[dict] = [
     {"key": "email.from_address", "category": "email", "type": "string",
      "label": "From address", "value": ""},
     {"key": "email.from_name", "category": "email", "type": "string",
-     "label": "From name", "value": "PUG Accommodation"},
+     "label": "From name", "value": "GreenTech Real Estate"},
     {"key": "email.tls_enabled", "category": "email", "type": "bool",
      "label": "Use TLS", "value": True},
+    # The master tap. Off by default and deliberately separate from
+    # having valid SMTP details: configuring a mail server should never
+    # be the same act as starting to mail clients.
+    {"key": "email.enabled", "category": "email", "type": "bool",
+     "label": "Send email", "value": False,
+     "description": "Off: messages are still composed and logged, but nothing leaves the building. "
+                    "Turn on only when the templates and recipients have been checked."},
+    {"key": "email.redirect_to", "category": "email", "type": "string",
+     "label": "Redirect all mail to", "value": "",
+     "description": "Safety net for trials — when set, every message goes here instead of the "
+                    "real recipient, with the intended address noted in the body."},
+
+    # ---------- Notifications ----------
+    {"key": "notifications.enabled", "category": "notifications", "type": "bool",
+     "label": "Run the notification sweep", "value": False,
+     "description": "The daily job that evaluates the rules below. Off until you are ready."},
+    {"key": "notifications.send_hour", "category": "notifications", "type": "int",
+     "label": "Daily send hour (UTC)", "value": 6,
+     "description": "Qatar is UTC+3, so 6 here is 9am local."},
+    {"key": "notifications.digest_emails", "category": "notifications", "type": "string",
+     "label": "Staff digest recipients", "value": "",
+     "description": "Comma-separated addresses that receive the internal summary of each sweep."},
+
+    # ---------- Telegram ----------
+    {"key": "telegram.enabled", "category": "telegram", "type": "bool",
+     "label": "Send Telegram messages", "value": False},
+    {"key": "telegram.bot_token", "category": "telegram", "type": "password",
+     "label": "Bot token", "value": "", "is_secret": True,
+     "description": "From @BotFather. Stored encrypted; never returned by the API."},
+    {"key": "telegram.chat_id", "category": "telegram", "type": "string",
+     "label": "Chat ID", "value": "",
+     "description": "The staff group or channel id, e.g. -1001234567890."},
+
+    # ---------- AI ----------
+    {"key": "ai.enabled", "category": "ai", "type": "bool",
+     "label": "Enable AI features", "value": False,
+     "description": "Drafting and the monthly summary. Drafts are always reviewed before sending."},
+    {"key": "ai.provider", "category": "ai", "type": "select",
+     "label": "Provider", "value": "gemini",
+     "options": [
+         {"value": "gemini", "label": "Google Gemini"},
+         {"value": "azure", "label": "Azure OpenAI"},
+         {"value": "local", "label": "Local (OpenAI-compatible)"},
+     ]},
+    {"key": "ai.api_key", "category": "ai", "type": "password",
+     "label": "API key", "value": "", "is_secret": True},
+    {"key": "ai.endpoint", "category": "ai", "type": "string",
+     "label": "Endpoint", "value": "",
+     "description": "Azure resource URL, or the base URL of your local server "
+                    "(e.g. http://localhost:11434/v1). Leave blank for Gemini."},
+    {"key": "ai.model", "category": "ai", "type": "string",
+     "label": "Model", "value": "gemini-2.0-flash",
+     "description": "Gemini model name, Azure deployment name, or local model id."},
+    {"key": "ai.timeout_seconds", "category": "ai", "type": "int",
+     "label": "Request timeout (seconds)", "value": 30},
 
     # ---------- UI / Theme ----------
     {"key": "ui.accent_color", "category": "ui", "type": "select",
@@ -182,7 +272,7 @@ DEFAULTS: list[dict] = [
                     "Leave empty to use BACKUP_FOLDER env var, which itself defaults to "
                     "a `backups/` folder next to the repo root. The path must exist and "
                     "be writable by the user running the backend process.",
-     "help": "e.g. C:\\Apps\\housing-backups   or   /var/lib/housing/backups"},
+     "help": "e.g. C:\\Apps\\greentech-backups   or   /var/lib/greentech/backups"},
     {"key": "backup.schedule", "category": "backup", "type": "select",
      "label": "Automatic backup schedule", "value": "daily",
      "options": [
@@ -263,9 +353,16 @@ def _coerce_value(key: str, value: Any) -> Any:
 
 
 def get(key: str, default: Any = None) -> Any:
+    cache_key = f"settings:{key}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached["value"] if cached["found"] else default
+
     row = SystemSetting.query.filter_by(key=key).first()
     if row is None:
+        cache_set(cache_key, {"found": False, "value": None}, _CACHE_TTL)
         return default
+    cache_set(cache_key, {"found": True, "value": row.value}, _CACHE_TTL)
     return row.value
 
 
@@ -300,6 +397,7 @@ def set_value(key: str, value: Any, *, actor_id: int | None = None,
             row.description = description
         row.updated_by = actor_id
     db.session.flush()
+    cache_delete(f"settings:{key}")
     return row
 
 

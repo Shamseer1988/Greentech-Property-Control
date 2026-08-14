@@ -7,7 +7,7 @@ from sqlalchemy.orm import relationship
 from .base import BaseModel
 
 
-MAINTENANCE_ENTITY_TYPES = {"property", "room", "bed"}
+MAINTENANCE_ENTITY_TYPES = {"property", "unit"}
 MAINTENANCE_STATUSES = {"in_progress", "completed", "cancelled"}
 
 
@@ -35,8 +35,8 @@ class LandlordRenewal(BaseModel):
 
     property = relationship("Property", lazy="joined")
     landlord = relationship("Landlord", lazy="joined")
-    old_agreement = relationship("PropertyAgreement", foreign_keys=[old_agreement_id], lazy="joined")
-    new_agreement = relationship("PropertyAgreement", foreign_keys=[new_agreement_id], lazy="joined")
+    old_agreement = relationship("LandlordContract", foreign_keys=[old_agreement_id], lazy="joined")
+    new_agreement = relationship("LandlordContract", foreign_keys=[new_agreement_id], lazy="joined")
 
     def to_dict(self, exclude=None):
         data = super().to_dict(exclude=exclude)
@@ -61,7 +61,7 @@ class MaintenanceRecord(BaseModel):
     __tablename__ = "maintenance_records"
 
     transaction_number = Column(String(40), unique=True, nullable=False, index=True)
-    entity_type = Column(String(16), nullable=False, index=True)  # property / room / bed
+    entity_type = Column(String(16), nullable=False, index=True)  # property / unit
     entity_id = Column(Integer, nullable=False, index=True)
 
     property_id = Column(Integer, ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)

@@ -1,9 +1,11 @@
 """Global search endpoint — Cmd-K style typeahead across the main
-entities the operator interacts with. Permission-gated per entity type."""
+entities the operator interacts with. Permission-gated per entity type.
+
+Clients and contracts join the result groups in Phases 1-2."""
 from flask import Blueprint, request
 
 from ..extensions import db
-from ..models import Property, Room, Bed, Employee, Landlord
+from ..models import Property, Unit, Landlord, Client, ClientContract, GeneratedAgreement
 from ..utils.auth import login_required, current_user
 from ..utils.responses import success_response
 
@@ -23,8 +25,8 @@ def search():
     q = (request.args.get("q") or "").strip()
     if len(q) < 2:
         return success_response(data={
-            "properties": [], "rooms": [], "beds": [],
-            "employees": [], "landlords": [],
+            "properties": [], "units": [], "landlords": [], "clients": [],
+            "contracts": [], "agreements": [],
         }, meta={"q": q, "min_chars": 2})
 
     user = current_user()
@@ -54,60 +56,20 @@ def search():
             "href": f"/properties/{p.id}",
         } for p in rows]
 
-    rooms: list[dict] = []
-    if _can(user, "room.view"):
+    units: list[dict] = []
+    if _can(user, "unit.view"):
         rows = (
-            db.session.query(Room).join(Property, Room.property_id == Property.id)
-            .filter(db.func.lower(Room.room_number).like(like))
-            .order_by(Property.name.asc(), Room.room_number.asc())
+            db.session.query(Unit).join(Property, Unit.property_id == Property.id)
+            .filter(db.func.lower(Unit.unit_number).like(like))
+            .order_by(Property.name.asc(), Unit.unit_number.asc())
             .limit(LIMIT_PER_GROUP).all()
         )
-        rooms = [{
-            "id": r.id, "code": r.room_number,
-            "label": f"Room {r.room_number}",
-            "sublabel": f"{r.property.name if r.property else ''} · capacity {r.capacity or '—'}",
-            "href": f"/properties/{r.property_id}",
-        } for r in rows]
-
-    beds: list[dict] = []
-    if _can(user, "bed.view"):
-        rows = (
-            Bed.query
-            .filter(db.func.lower(Bed.bed_code).like(like))
-            .order_by(Bed.bed_code.asc())
-            .limit(LIMIT_PER_GROUP).all()
-        )
-        beds = [{
-            "id": b.id, "code": b.bed_code,
-            "label": b.bed_code,
-            "sublabel": f"status: {b.status}" + (
-                f" · {b.room.property.name}" if b.room and b.room.property else ""
-            ),
-            "href": f"/properties/{b.property_id}",
-        } for b in rows]
-
-    employees: list[dict] = []
-    if _can(user, "employee.view"):
-        rows = (
-            Employee.query
-            .filter(
-                db.or_(
-                    db.func.lower(Employee.code).like(like),
-                    db.func.lower(Employee.full_name).like(like),
-                    db.func.lower(Employee.qid_number).like(like),
-                    db.func.lower(Employee.mobile_number).like(like),
-                )
-            )
-            .order_by(Employee.full_name.asc())
-            .limit(LIMIT_PER_GROUP).all()
-        )
-        employees = [{
-            "id": e.id, "code": e.code, "label": e.full_name,
-            "sublabel": " · ".join(
-                x for x in [e.code, e.designation, e.division.name if e.division else None] if x
-            ),
-            "href": f"/employees/{e.id}",
-        } for e in rows]
+        units = [{
+            "id": u.id, "code": u.unit_number,
+            "label": f"Unit {u.unit_number}",
+            "sublabel": f"{u.property.name if u.property else ''} · {(u.unit_type or '').replace('_', ' ')}",
+            "href": f"/properties/{u.property_id}",
+        } for u in rows]
 
     landlords: list[dict] = []
     if _can(user, "landlord.view"):
@@ -129,11 +91,68 @@ def search():
             "href": "/landlords",  # no detail page; list with row highlight
         } for l in rows]
 
-    total = sum(len(g) for g in (properties, rooms, beds, employees, landlords))
+    clients: list[dict] = []
+    if _can(user, "client.view"):
+        rows = (
+            Client.query
+            .filter(
+                db.or_(
+                    db.func.lower(Client.code).like(like),
+                    db.func.lower(Client.name).like(like),
+                    Client.name_ar.like(f"%{q}%"),
+                    db.func.lower(Client.qid_cr_number).like(like),
+                    db.func.lower(Client.mobile).like(like),
+                )
+            )
+            .order_by(Client.name.asc())
+            .limit(LIMIT_PER_GROUP).all()
+        )
+        clients = [{
+            "id": c.id, "code": c.code, "label": c.name,
+            "sublabel": " · ".join(x for x in [c.code, c.qid_cr_number, c.mobile] if x),
+            "href": "/clients",
+        } for c in rows]
+
+    # Client and agreement numbers are the two identifiers people actually
+    # search by that neither of the two blocks above could find — a
+    # contract number or agreement number isn't a name, code or QID/CR.
+    contracts: list[dict] = []
+    if _can(user, "contract.view"):
+        rows = (
+            ClientContract.query
+            .filter(db.func.lower(ClientContract.contract_number).like(like))
+            .order_by(ClientContract.contract_number.desc())
+            .limit(LIMIT_PER_GROUP).all()
+        )
+        contracts = [{
+            "id": c.id, "code": c.contract_number, "label": c.contract_number,
+            "sublabel": " · ".join(x for x in [
+                c.client.name if c.client else None,
+                c.property.name if c.property else None] if x),
+            "href": f"/contracts/{c.id}",
+        } for c in rows]
+
+    agreements: list[dict] = []
+    if _can(user, "agreement.view"):
+        rows = (
+            GeneratedAgreement.query
+            .filter(db.func.lower(GeneratedAgreement.agreement_number).like(like))
+            .order_by(GeneratedAgreement.agreement_number.desc())
+            .limit(LIMIT_PER_GROUP).all()
+        )
+        agreements = [{
+            "id": a.id, "code": a.agreement_number, "label": a.agreement_number,
+            "sublabel": (a.landlord.name if a.party_role == "landlord" and a.landlord
+                        else a.client.name if a.client else None) or "",
+            "href": "/agreements",
+        } for a in rows]
+
+    total = sum(len(g) for g in (properties, units, landlords, clients, contracts, agreements))
     return success_response(
         data={
-            "properties": properties, "rooms": rooms, "beds": beds,
-            "employees": employees, "landlords": landlords,
+            "properties": properties, "units": units,
+            "landlords": landlords, "clients": clients,
+            "contracts": contracts, "agreements": agreements,
         },
         meta={"q": q, "total": total, "limit_per_group": LIMIT_PER_GROUP},
     )

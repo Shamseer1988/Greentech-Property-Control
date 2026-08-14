@@ -15,7 +15,7 @@ class Floor(BaseModel):
     remarks = Column(Text, nullable=True)
 
     property = relationship("Property")
-    rooms = relationship("Room", back_populates="floor", lazy="select", cascade="all, delete-orphan")
+    units = relationship("Unit", back_populates="floor", lazy="select", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("property_id", "floor_number", name="uq_floor_property_number"),
@@ -24,5 +24,5 @@ class Floor(BaseModel):
 
     def to_dict(self, exclude=None):
         data = super().to_dict(exclude=exclude)
-        data["room_count"] = len(self.rooms) if self.rooms is not None else 0
+        data["unit_count"] = len(self.units) if self.units is not None else 0
         return data

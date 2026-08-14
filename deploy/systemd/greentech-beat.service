@@ -1,0 +1,26 @@
+[Unit]
+Description=GreenTech Real Estate Portal — Celery beat scheduler
+After=network.target greentech-worker.service
+Wants=
+
+[Service]
+Type=simple
+User=greentech
+Group=greentech
+WorkingDirectory=/opt/greentech/backend
+EnvironmentFile=/opt/greentech/backend/.env
+ExecStart=/opt/greentech/backend/.venv/bin/celery -A celery_worker.celery beat --loglevel=info --schedule=/var/lib/greentech/celerybeat-schedule
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+# beat needs to write its schedule file under /var/lib/greentech.
+ReadWritePaths=/var/lib/greentech
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

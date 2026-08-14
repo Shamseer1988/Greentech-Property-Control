@@ -35,9 +35,9 @@ describe("auth store", () => {
   });
 
   it("matches an explicit code", () => {
-    useAuth.setState({ user: makeUser({ permissions: ["property.view", "employee.view"] }) });
+    useAuth.setState({ user: makeUser({ permissions: ["property.view", "landlord.view"] }) });
     expect(useAuth.getState().has("property.view")).toBe(true);
-    expect(useAuth.getState().has("employee.view")).toBe(true);
+    expect(useAuth.getState().has("landlord.view")).toBe(true);
     expect(useAuth.getState().has("settings.manage")).toBe(false);
   });
 

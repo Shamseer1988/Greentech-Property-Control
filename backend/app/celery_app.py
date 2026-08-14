@@ -27,7 +27,7 @@ _REDIS_URL = os.getenv("REDIS_URL") or "memory://"
 _RESULT_BACKEND = _REDIS_URL if _REDIS_URL != "memory://" else "cache+memory://"
 
 celery = Celery(
-    "pug_accommodation",
+    "greentech_realestate",
     broker=_REDIS_URL,
     backend=_RESULT_BACKEND,
 )
@@ -45,6 +45,11 @@ celery.conf.update(
             "task": "app.tasks.expiry.daily_expiry_sweep",
             "schedule": crontab(hour=2, minute=0),
         },
+        # Raise every contract's monthly charge on the 1st at 01:00 UTC.
+        "monthly-rent-generation": {
+            "task": "app.tasks.rent.generate_monthly_rent",
+            "schedule": crontab(day_of_month=1, hour=1, minute=0),
+        },
         "daily-reminder-recompute": {
             "task": "app.tasks.reminders.recompute_reminder_summary",
             "schedule": crontab(hour=2, minute=15),
@@ -55,6 +60,20 @@ celery.conf.update(
         "scheduled-backup": {
             "task": "app.tasks.backup.scheduled_backup",
             "schedule": crontab(hour=3, minute=0),
+        },
+        # Weekly, an hour after the daily backup window so the freshest
+        # backup is what gets checked. Alerts via Telegram on failure —
+        # see services/backup.py::verify_backup_contents().
+        "weekly-backup-verify": {
+            "task": "app.tasks.backup.verify_latest_backup",
+            "schedule": crontab(day_of_week=1, hour=4, minute=0),
+        },
+        # Fires hourly; the task itself checks `notifications.enabled`
+        # and `notifications.send_hour`, so the operator can move the
+        # send time from Settings without editing a cron expression.
+        "notification-sweep": {
+            "task": "app.tasks.notifications.hourly_notification_sweep",
+            "schedule": crontab(minute=5),
         },
     },
 )

@@ -1,9 +1,16 @@
-def _make_property(client, auth_headers, name="Test P", code=None):
-    return client.post(
-        "/api/v1/properties",
-        headers=auth_headers,
-        json={"name": name, "property_type": "full_building"},
-    ).get_json()["data"]
+"""Property structure: floors, units, the layout generator and renumbering.
+
+A Unit is the atom of occupancy — rooms, flats, stores, and
+shared/dedicated facilities. Contract-driven allocation arrives in
+Phase 2; here occupancy is set directly via /units/{id}/status.
+"""
+
+
+def _make_property(client, auth_headers, name="Test P", layout=None):
+    payload = {"name": name, "property_type": "full_building"}
+    if layout is not None:
+        payload["layout"] = layout
+    return client.post("/api/v1/properties", headers=auth_headers, json=payload).get_json()["data"]
 
 
 def _make_floor(client, auth_headers, prop_id, number="1"):
@@ -14,19 +21,20 @@ def _make_floor(client, auth_headers, prop_id, number="1"):
     ).get_json()["data"]
 
 
-def _make_room(client, auth_headers, floor_id, number="101", capacity=2, room_type="shared"):
+def _make_unit(client, auth_headers, floor_id, number="101", unit_type="room", **extra):
     return client.post(
-        f"/api/v1/floors/{floor_id}/rooms",
+        f"/api/v1/floors/{floor_id}/units",
         headers=auth_headers,
-        json={"room_number": number, "capacity": capacity, "room_type": room_type},
+        json={"unit_number": number, "unit_type": unit_type, **extra},
     ).get_json()["data"]
 
 
-def test_floor_and_room_flow(client, auth_headers):
+# ---------------------------------------------------------------- floors
+
+def test_floor_and_unit_flow(client, auth_headers):
     prop = _make_property(client, auth_headers)
 
     floor = _make_floor(client, auth_headers, prop["id"], "1")
-    # Duplicate floor number rejected
     dup = client.post(
         f"/api/v1/properties/{prop['id']}/floors",
         headers=auth_headers,
@@ -34,614 +42,335 @@ def test_floor_and_room_flow(client, auth_headers):
     )
     assert dup.status_code == 409
 
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    assert room["room_number"] == "101"
-    assert room["capacity"] == 2
-    assert room["occupancy_status"] == "empty"
+    unit = _make_unit(client, auth_headers, floor["id"], "101")
+    assert unit["unit_number"] == "101"
+    assert unit["unit_type"] == "room"
+    assert unit["occupancy_status"] == "empty"
 
-    # Same room number on the same floor rejected
-    dup_room = client.post(
-        f"/api/v1/floors/{floor['id']}/rooms",
+    dup_unit = client.post(
+        f"/api/v1/floors/{floor['id']}/units",
         headers=auth_headers,
-        json={"room_number": "101", "capacity": 1},
+        json={"unit_number": "101"},
     )
-    assert dup_room.status_code == 409
+    assert dup_unit.status_code == 409
 
 
-def test_bed_capacity_and_codes(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Cap P")
-    floor = _make_floor(client, auth_headers, prop["id"], "2")
-    room = _make_room(client, auth_headers, floor["id"], "201", capacity=2)
-
-    b1 = client.post(
-        f"/api/v1/rooms/{room['id']}/beds",
-        headers=auth_headers,
-        json={"bed_number": "1"},
-    )
-    assert b1.status_code == 201
-    assert b1.get_json()["data"]["bed_code"] == f"{prop['code']}-F2-R201-B1"
-
-    b2 = client.post(
-        f"/api/v1/rooms/{room['id']}/beds",
-        headers=auth_headers,
-        json={"bed_number": "2", "bed_type": "bunk_upper"},
-    )
-    assert b2.status_code == 201
-
-    # Capacity exceeded
-    over = client.post(
-        f"/api/v1/rooms/{room['id']}/beds",
-        headers=auth_headers,
-        json={"bed_number": "3"},
-    )
-    assert over.status_code == 400
-    assert "capacity" in over.get_json()["message"].lower()
-
-    # Cannot shrink capacity below current bed count
-    shrink = client.put(
-        f"/api/v1/rooms/{room['id']}",
-        headers=auth_headers,
-        json={"capacity": 1},
-    )
-    assert shrink.status_code == 400
-
-
-def test_bed_status_state_machine(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Status P")
+def test_cannot_delete_floor_with_units(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Del P")
     floor = _make_floor(client, auth_headers, prop["id"], "3")
-    room = _make_room(client, auth_headers, floor["id"], "301", capacity=2)
-    b1 = client.post(
-        f"/api/v1/rooms/{room['id']}/beds",
-        headers=auth_headers,
-        json={"bed_number": "1"},
-    ).get_json()["data"]
+    _make_unit(client, auth_headers, floor["id"], "301")
 
-    # empty -> maintenance allowed
-    r = client.post(
-        f"/api/v1/beds/{b1['id']}/status", headers=auth_headers, json={"status": "maintenance"}
-    )
-    assert r.status_code == 200
-    assert r.get_json()["data"]["status"] == "maintenance"
+    blocked = client.delete(f"/api/v1/floors/{floor['id']}", headers=auth_headers)
+    assert blocked.status_code == 409
 
-    # maintenance -> occupied not allowed manually
+
+# ----------------------------------------------------------------- units
+
+def test_unit_types_and_facilities(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Facility P")
+    floor = _make_floor(client, auth_headers, prop["id"], "G")
+
+    store = _make_unit(client, auth_headers, floor["id"], "S1", unit_type="store",
+                       monthly_rent=6000)
+    assert store["unit_type"] == "store"
+    assert store["monthly_rent"] == 6000
+
+    kitchen = _make_unit(client, auth_headers, floor["id"], "K1", unit_type="kitchen",
+                         is_shared_facility=True)
+    assert kitchen["is_shared_facility"] is True
+
     bad = client.post(
-        f"/api/v1/beds/{b1['id']}/status", headers=auth_headers, json={"status": "occupied"}
+        f"/api/v1/floors/{floor['id']}/units",
+        headers=auth_headers,
+        json={"unit_number": "X1", "unit_type": "spaceship"},
     )
     assert bad.status_code == 400
 
-    # maintenance -> empty allowed
-    back = client.post(
-        f"/api/v1/beds/{b1['id']}/status", headers=auth_headers, json={"status": "empty"}
-    )
-    assert back.status_code == 200
 
-
-def test_room_status_auto_recompute_via_db(app, client, auth_headers):
-    prop = _make_property(client, auth_headers, "Auto P")
+def test_unit_status_transitions(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Status P")
     floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    b1 = client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "1"},
-    ).get_json()["data"]
-    b2 = client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "2"},
-    ).get_json()["data"]
+    unit = _make_unit(client, auth_headers, floor["id"], "101")
 
-    # All beds empty -> room remains empty
-    fresh = client.get(f"/api/v1/rooms/{room['id']}", headers=auth_headers).get_json()["data"]
-    assert fresh["occupancy_status"] == "empty"
+    for status in ("occupied", "maintenance", "blocked", "empty"):
+        r = client.post(f"/api/v1/units/{unit['id']}/status", headers=auth_headers,
+                        json={"status": status})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        assert r.get_json()["data"]["occupancy_status"] == status
 
-    # Simulate an assignment by flipping bed.status directly (Phase 6 will use a transaction)
-    with app.app_context():
-        from app.extensions import db
-        from app.models import Bed, Room
-        bed = db.session.get(Bed, b1["id"])
-        bed.status = "occupied"
-        db.session.get(Room, room["id"]).recompute_status()
-        db.session.commit()
-
-    again = client.get(f"/api/v1/rooms/{room['id']}", headers=auth_headers).get_json()["data"]
-    assert again["occupancy_status"] == "partially_occupied"
-
-    with app.app_context():
-        from app.extensions import db
-        from app.models import Bed, Room
-        db.session.get(Bed, b2["id"]).status = "occupied"
-        db.session.get(Room, room["id"]).recompute_status()
-        db.session.commit()
-
-    full = client.get(f"/api/v1/rooms/{room['id']}", headers=auth_headers).get_json()["data"]
-    assert full["occupancy_status"] == "full"
+    bad = client.post(f"/api/v1/units/{unit['id']}/status", headers=auth_headers,
+                      json={"status": "on_fire"})
+    assert bad.status_code == 400
 
 
-def test_property_structure_and_occupancy(app, client, auth_headers):
+def test_cannot_delete_occupied_unit(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Occ P")
+    floor = _make_floor(client, auth_headers, prop["id"], "1")
+    unit = _make_unit(client, auth_headers, floor["id"], "101")
+    client.post(f"/api/v1/units/{unit['id']}/status", headers=auth_headers,
+                json={"status": "occupied"})
+
+    blocked = client.delete(f"/api/v1/units/{unit['id']}", headers=auth_headers)
+    assert blocked.status_code == 409
+
+    client.post(f"/api/v1/units/{unit['id']}/status", headers=auth_headers,
+                json={"status": "empty"})
+    ok = client.delete(f"/api/v1/units/{unit['id']}", headers=auth_headers)
+    assert ok.status_code == 200
+
+
+# ------------------------------------------------------- structure view
+
+def test_property_structure_nests_units_under_floors(client, auth_headers):
     prop = _make_property(client, auth_headers, "Struct P")
     f1 = _make_floor(client, auth_headers, prop["id"], "1")
     f2 = _make_floor(client, auth_headers, prop["id"], "2")
-    r1 = _make_room(client, auth_headers, f1["id"], "101", capacity=2)
-    r2 = _make_room(client, auth_headers, f2["id"], "201", capacity=1)
-    client.post(f"/api/v1/rooms/{r1['id']}/beds", headers=auth_headers, json={"bed_number": "1"})
-    client.post(f"/api/v1/rooms/{r1['id']}/beds", headers=auth_headers, json={"bed_number": "2"})
-    client.post(f"/api/v1/rooms/{r2['id']}/beds", headers=auth_headers, json={"bed_number": "1"})
+    _make_unit(client, auth_headers, f1["id"], "101")
+    _make_unit(client, auth_headers, f1["id"], "102")
+    _make_unit(client, auth_headers, f2["id"], "201")
 
-    # Move one bed to maintenance manually
-    bed_id = client.get(f"/api/v1/rooms/{r2['id']}/beds", headers=auth_headers).get_json()["data"][0]["id"]
-    client.post(f"/api/v1/beds/{bed_id}/status", headers=auth_headers, json={"status": "maintenance"})
+    resp = client.get(f"/api/v1/properties/{prop['id']}/structure", headers=auth_headers)
+    assert resp.status_code == 200
+    floors = resp.get_json()["data"]
+    assert len(floors) == 2
+    by_number = {f["floor_number"]: f for f in floors}
+    assert len(by_number["1"]["units"]) == 2
+    assert len(by_number["2"]["units"]) == 1
 
-    struct = client.get(f"/api/v1/properties/{prop['id']}/structure", headers=auth_headers).get_json()
-    assert struct["meta"]["count"] == 2
-    assert struct["data"][0]["floor_number"] == "1"
-    assert len(struct["data"][0]["rooms"]) == 1
-    assert len(struct["data"][0]["rooms"][0]["beds"]) == 2
-
-    summary = client.get(f"/api/v1/properties/{prop['id']}/occupancy", headers=auth_headers).get_json()["data"]
-    assert summary["beds"]["total"] == 3
-    assert summary["beds"]["empty"] == 2
-    assert summary["beds"]["maintenance"] == 1
-    assert summary["beds"]["occupied"] == 0
-    assert summary["beds"]["occupancy_percent"] == 0.0
-    assert summary["rooms"]["total"] == 2
+    detail = client.get(f"/api/v1/properties/{prop['id']}", headers=auth_headers).get_json()["data"]
+    assert detail["floors_count"] == 2
+    assert detail["units_count"] == 3
 
 
-def test_cannot_delete_floor_with_rooms(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Del P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    _make_room(client, auth_headers, floor["id"], "101")
-    resp = client.delete(f"/api/v1/floors/{floor['id']}", headers=auth_headers)
-    assert resp.status_code == 409
-
-
-def test_cannot_delete_room_with_beds(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Del R P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101")
-    client.post(f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers, json={"bed_number": "1"})
-    resp = client.delete(f"/api/v1/rooms/{room['id']}", headers=auth_headers)
-    assert resp.status_code == 409
-
-
-# ---------- Phase 2: property-creation layout generator ----------
-
-
-def _create_with_layout(client, auth_headers, name, layout):
-    return client.post(
-        "/api/v1/properties",
-        headers=auth_headers,
-        json={"name": name, "property_type": "full_building", "layout": layout},
-    )
-
+# ------------------------------------------------------ layout generator
 
 def test_layout_creates_full_structure(client, auth_headers):
-    resp = _create_with_layout(client, auth_headers, "Gen P", {
-        "floors": 3, "rooms_per_floor": 4, "beds_per_room": 2,
+    prop = _make_property(client, auth_headers, "Layout P", layout={
+        "floors": 3, "units_per_floor": 4,
     })
-    assert resp.status_code == 201, resp.get_data(as_text=True)
-    data = resp.get_json()["data"]
-    assert data["layout_generated"] == {"floors": 3, "rooms": 12, "beds": 24}
+    assert prop["layout_generated"] == {"floors": 3, "units": 12}
 
-    struct = client.get(
-        f"/api/v1/properties/{data['id']}/structure", headers=auth_headers
-    ).get_json()
-    assert struct["meta"]["count"] == 3
-    # Floor 1 → rooms 101..104 → 2 beds each, bed_code prefixed with PROP-Fn
-    first_floor = struct["data"][0]
-    assert first_floor["floor_number"] == "1"
-    assert [r["room_number"] for r in first_floor["rooms"]] == ["101", "102", "103", "104"]
-    first_room = first_floor["rooms"][0]
-    assert first_room["capacity"] == 2
-    assert [b["bed_code"] for b in first_room["beds"]] == [
-        f"{data['code']}-F1-R101-B1",
-        f"{data['code']}-F1-R101-B2",
-    ]
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert [f["floor_number"] for f in floors] == ["1", "2", "3"]
+    assert [r["unit_number"] for r in floors[0]["units"]] == ["101", "102", "103", "104"]
 
 
 def test_layout_ground_floor_naming(client, auth_headers):
-    resp = _create_with_layout(client, auth_headers, "GF P", {
-        "floors": 2, "rooms_per_floor": 2, "beds_per_room": 1,
-        "ground_floor": True,
+    prop = _make_property(client, auth_headers, "Ground P", layout={
+        "floors": 2, "units_per_floor": 2, "ground_floor": True,
     })
-    assert resp.status_code == 201
-    data = resp.get_json()["data"]
-    struct = client.get(
-        f"/api/v1/properties/{data['id']}/structure", headers=auth_headers
-    ).get_json()
-    # Floor numbers ordered alphabetically by floor_number string: "1", "G".
-    # Order isn't what we care about here — the SET of values is.
-    floor_numbers = {f["floor_number"] for f in struct["data"]}
-    assert floor_numbers == {"G", "1"}
-    ground = next(f for f in struct["data"] if f["floor_number"] == "G")
-    assert [r["room_number"] for r in ground["rooms"]] == ["G01", "G02"]
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    numbers = {f["floor_number"] for f in floors}
+    assert numbers == {"G", "1"}
+    ground = next(f for f in floors if f["floor_number"] == "G")
+    assert [r["unit_number"] for r in ground["units"]] == ["G01", "G02"]
+
+
+def test_layout_respects_default_unit_type(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Flat P", layout={
+        "floors": 1, "units_per_floor": 2, "default_unit_type": "flat_2bhk",
+    })
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert all(r["unit_type"] == "flat_2bhk" for r in floors[0]["units"])
 
 
 def test_layout_bounds_rejected(client, auth_headers):
-    pre = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
-    resp = _create_with_layout(client, auth_headers, "Bad P", {
-        "floors": 51, "rooms_per_floor": 1, "beds_per_room": 1,
+    resp = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Too Big", "property_type": "full_building",
+        "layout": {"floors": 999, "units_per_floor": 4},
     })
     assert resp.status_code == 400
-    assert "floors" in resp.get_json()["message"].lower()
-    # Atomic: nothing committed when the layout is rejected.
-    post = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
-    assert post == pre
 
 
-def test_layout_invalid_bed_type_rolls_back(client, auth_headers):
-    pre = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
-    resp = _create_with_layout(client, auth_headers, "Atomic P", {
-        "floors": 1, "rooms_per_floor": 1, "beds_per_room": 1,
-        "default_bed_type": "hammock",
+def test_layout_invalid_unit_type_rolls_back(client, auth_headers):
+    before = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
+    resp = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Bad Type", "property_type": "full_building",
+        "layout": {"floors": 1, "units_per_floor": 1, "default_unit_type": "castle"},
     })
     assert resp.status_code == 400
-    post = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
-    assert post == pre
+    after = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
+    assert after == before, "property must not survive a failed layout"
 
 
 def test_layout_refuses_when_floors_exist(app, client, auth_headers):
-    """The generator service refuses to re-build a property that already has floors."""
-    prop = _make_property(client, auth_headers, "Reuse P")
+    """The generator is only reachable at create time over HTTP, so the
+    double-build guard is exercised against the service directly."""
+    import pytest
+    from app.models import Property, User
+    from app.services import layout as layout_service
+
+    prop = _make_property(client, auth_headers, "Existing P")
     _make_floor(client, auth_headers, prop["id"], "1")
+
     with app.app_context():
-        from app.extensions import db
-        from app.models import Property, User
-        from app.services import layout as layout_service
-        p = db.session.get(Property, prop["id"])
-        admin = User.query.filter_by(username="admin").one()
-        try:
+        row = Property.query.get(prop["id"])
+        actor = User.query.filter_by(username="admin").first()
+        with pytest.raises(layout_service.LayoutError):
             layout_service.generate_structure(
-                p, floors=2, rooms_per_floor=1, beds_per_room=1, actor=admin,
+                row, floors=1, units_per_floor=1, actor=actor,
             )
-            raised = False
-        except layout_service.LayoutError:
-            raised = True
-        assert raised
 
 
-def test_create_without_layout_unchanged(client, auth_headers):
-    """Backward compat: creating a property without `layout` behaves exactly as before."""
-    resp = client.post(
-        "/api/v1/properties",
-        headers=auth_headers,
-        json={"name": "Bare P", "property_type": "full_building"},
-    )
-    assert resp.status_code == 201
-    data = resp.get_json()["data"]
-    assert "layout_generated" not in data
-    struct = client.get(
-        f"/api/v1/properties/{data['id']}/structure", headers=auth_headers
-    ).get_json()
-    assert struct["meta"]["count"] == 0
+def test_create_without_layout_leaves_property_empty(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Plain P")
+    assert "layout_generated" not in prop
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert floors == []
 
 
-# ---------- Phase 3: bunk-aware bulk bed create ----------
+# ---------------------------------------------------------- compounds
+
+def test_compound_builds_every_building(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Compound P", layout={
+        "buildings": [
+            {"code": "A", "floors": 2, "units_per_floor": 3, "store_count": 1},
+            {"code": "B", "floors": 1, "units_per_floor": 4},
+        ],
+    })
+    generated = prop["layout_generated"]
+    assert generated["buildings"] == 2
+    assert generated["rooms"] == 2 * 3 + 1 * 4          # 6 + 4
+    assert generated["stores"] == 1
+    assert generated["units"] == generated["rooms"] + generated["stores"]
+
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    numbers = sorted(f["floor_number"] for f in floors)
+    assert numbers == ["A-1", "A-2", "A-S", "B-1"]
+
+    a1 = next(f for f in floors if f["floor_number"] == "A-1")
+    assert [u["unit_number"] for u in a1["units"]] == ["A-101", "A-102", "A-103"]
+    stores = next(f for f in floors if f["floor_number"] == "A-S")
+    assert [u["unit_number"] for u in stores["units"]] == ["A-S01"]
+    assert stores["units"][0]["unit_type"] == "store"
 
 
-def test_bulk_three_singles_creates_three_beds(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Bulk Single P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=3)
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/beds/bulk",
-        headers=auth_headers,
-        json={"units": [{"type": "single"}, {"type": "single"}, {"type": "single"}]},
-    )
-    assert resp.status_code == 201, resp.get_data(as_text=True)
-    data = resp.get_json()["data"]
-    assert data["count"] == 3
-    numbers = [b["bed_number"] for b in data["beds"]]
-    types = [b["bed_type"] for b in data["beds"]]
-    assert numbers == ["1", "2", "3"]
-    assert types == ["single", "single", "single"]
+def test_compound_letters_buildings_when_no_code_given(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Auto Letter P", layout={
+        "buildings": [
+            {"floors": 1, "units_per_floor": 1},
+            {"floors": 1, "units_per_floor": 1},
+        ],
+    })
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert sorted(f["floor_number"] for f in floors) == ["A-1", "B-1"]
 
 
-def test_bulk_two_bunks_creates_four_beds_lower_upper(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Bulk Bunk P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    # capacity 4 to fit 2 bunk units (= 4 sleeping slots)
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=4)
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/beds/bulk",
-        headers=auth_headers,
-        json={"units": [{"type": "bunk"}, {"type": "bunk"}]},
-    )
-    assert resp.status_code == 201, resp.get_data(as_text=True)
-    data = resp.get_json()["data"]
-    assert data["count"] == 4
-    numbers = [b["bed_number"] for b in data["beds"]]
-    types = [b["bed_type"] for b in data["beds"]]
-    assert numbers == ["1L", "1U", "2L", "2U"]
-    assert types == ["bunk_lower", "bunk_upper", "bunk_lower", "bunk_upper"]
-    # bed_codes carry the L/U suffix end-to-end
-    assert data["beds"][0]["bed_code"] == f"{prop['code']}-F1-R101-B1L"
-    assert data["beds"][1]["bed_code"] == f"{prop['code']}-F1-R101-B1U"
-
-
-def test_bulk_mixed_units(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Bulk Mix P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=4)
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/beds/bulk",
-        headers=auth_headers,
-        json={"units": [{"type": "single"}, {"type": "bunk"}, {"type": "single"}]},
-    )
-    assert resp.status_code == 201
-    data = resp.get_json()["data"]
-    assert [b["bed_number"] for b in data["beds"]] == ["1", "2L", "2U", "3"]
-    assert [b["bed_type"] for b in data["beds"]] == [
-        "single", "bunk_lower", "bunk_upper", "single",
-    ]
-
-
-def test_bulk_capacity_overflow_rejected(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Bulk Cap P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    # 2 bunk units = 4 beds, room capacity is 2 → reject
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/beds/bulk",
-        headers=auth_headers,
-        json={"units": [{"type": "bunk"}, {"type": "bunk"}]},
-    )
+def test_compound_rejects_a_repeated_building_code(client, auth_headers):
+    before = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
+    resp = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Clashing Codes", "property_type": "compound",
+        "layout": {"buildings": [
+            {"code": "A", "floors": 1, "units_per_floor": 1},
+            {"code": "A", "floors": 1, "units_per_floor": 1},
+        ]},
+    })
     assert resp.status_code == 400
-    assert "capacity" in resp.get_json()["message"].lower()
-    # Nothing partially created
-    listed = client.get(f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers).get_json()["data"]
-    assert listed == []
+    after = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
+    assert after == before, "property must not survive a failed compound layout"
 
 
-def test_bulk_rejects_unknown_type(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Bulk Bad P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/beds/bulk",
-        headers=auth_headers,
-        json={"units": [{"type": "queen"}]},
-    )
+def test_compound_rejects_bad_bounds_on_one_building(client, auth_headers):
+    resp = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Bad Building", "property_type": "compound",
+        "layout": {"buildings": [
+            {"code": "A", "floors": 1, "units_per_floor": 1},
+            {"code": "B", "floors": 999, "units_per_floor": 1},
+        ]},
+    })
     assert resp.status_code == 400
-    assert "type" in resp.get_json()["message"].lower()
+    assert "Building 2" in resp.get_json()["message"]
 
 
-def test_structure_includes_employee_block_for_occupied_bed(app, client, auth_headers):
-    """Phase 4: /structure returns current_employee for occupied beds."""
-    # Create a property with a single 1-bed room.
-    prop = _make_property(client, auth_headers, "Plan P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=1)
-    bed = client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "1"},
-    ).get_json()["data"]
+def test_compound_refuses_when_floors_already_exist(app, client, auth_headers):
+    from app.models import Property, User
+    from app.services import layout as layout_service
+    import pytest
 
-    # Create an employee who needs accommodation.
-    emp_resp = client.post(
-        "/api/v1/employees", headers=auth_headers,
-        json={
-            "full_name": "Plan Tester",
-            "accommodation_required": True,
-            "status": "active",
-        },
-    )
-    assert emp_resp.status_code == 201, emp_resp.get_data(as_text=True)
-    emp = emp_resp.get_json()["data"]
+    prop = _make_property(client, auth_headers, "Occupied Compound")
+    _make_floor(client, auth_headers, prop["id"], "1")
 
-    # Post an assignment via the real endpoint so all side effects fire.
-    assign_resp = client.post(
-        "/api/v1/assignments", headers=auth_headers,
-        json={"employee_id": emp["id"], "bed_id": bed["id"]},
-    )
-    assert assign_resp.status_code == 201, assign_resp.get_data(as_text=True)
-
-    struct = client.get(
-        f"/api/v1/properties/{prop['id']}/structure", headers=auth_headers
-    ).get_json()
-    occupied_bed = struct["data"][0]["rooms"][0]["beds"][0]
-    assert occupied_bed["status"] == "occupied"
-    assert occupied_bed["current_employee"] is not None
-    assert occupied_bed["current_employee"]["id"] == emp["id"]
-    assert occupied_bed["current_employee"]["code"] == emp["code"]
-    assert occupied_bed["current_employee"]["full_name"] == "Plan Tester"
-    # division/designation are optional but the keys are always present
-    assert "division_name" in occupied_bed["current_employee"]
-    assert "designation" in occupied_bed["current_employee"]
+    with app.app_context():
+        row = Property.query.get(prop["id"])
+        actor = User.query.filter_by(username="admin").first()
+        with pytest.raises(layout_service.LayoutError):
+            layout_service.generate_compound_structure(
+                row, buildings=[{"code": "A", "floors": 1, "units_per_floor": 1}],
+                actor=actor,
+            )
 
 
-def test_structure_employee_block_null_for_empty_bed(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Plan Empty P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=1)
-    client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "1"},
-    )
-    struct = client.get(
-        f"/api/v1/properties/{prop['id']}/structure", headers=auth_headers
-    ).get_json()
-    bed = struct["data"][0]["rooms"][0]["beds"][0]
-    assert bed["current_employee"] is None
+def test_a_building_without_stores_gets_no_store_floor(client, auth_headers):
+    prop = _make_property(client, auth_headers, "No Store P", layout={
+        "buildings": [{"code": "A", "floors": 1, "units_per_floor": 1, "store_count": 0}],
+    })
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert [f["floor_number"] for f in floors] == ["A-1"]
 
 
-def test_over_long_bed_number_returns_400_not_500(client, auth_headers):
-    """A bed_number longer than the VARCHAR(16) column must 400, not crash."""
-    prop = _make_property(client, auth_headers, "LongBed P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/beds",
-        headers=auth_headers,
-        json={"bed_number": "PROP-0001-FFG-RG01-B3"},  # 21 chars, > 16
-    )
-    assert resp.status_code == 400
-    assert "16 characters" in resp.get_json()["message"]
+# --------------------------------------------------------- renumbering
 
-
-def test_bulk_empty_list_rejected(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Bulk Empty P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/beds/bulk",
-        headers=auth_headers,
-        json={"units": []},
-    )
-    assert resp.status_code == 400
-
-
-# ---------- Phase 5: bed/room actions visibly shift the occupancy summary ----------
-
-
-def test_bed_maintenance_reflected_in_property_summary(client, auth_headers):
-    """Phase 5b: marking a bed as maintenance shifts /occupancy counts."""
-    prop = _make_property(client, auth_headers, "Maint P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    b1 = client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "1"},
-    ).get_json()["data"]
-    client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "2"},
-    )
-
-    before = client.get(
-        f"/api/v1/properties/{prop['id']}/occupancy", headers=auth_headers
-    ).get_json()["data"]
-    assert before["beds"]["empty"] == 2
-    assert before["beds"]["maintenance"] == 0
+def test_renumber_units_rewrites_numbers(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Renum P", layout={
+        "floors": 1, "units_per_floor": 3,
+    })
+    floor = client.get(f"/api/v1/properties/{prop['id']}/floors",
+                       headers=auth_headers).get_json()["data"][0]
 
     resp = client.post(
-        f"/api/v1/beds/{b1['id']}/status", headers=auth_headers,
-        json={"status": "maintenance"},
-    )
-    assert resp.status_code == 200
-
-    after = client.get(
-        f"/api/v1/properties/{prop['id']}/occupancy", headers=auth_headers
-    ).get_json()["data"]
-    assert after["beds"]["empty"] == 1
-    assert after["beds"]["maintenance"] == 1
-    # And the bed itself reports the new status when re-read.
-    refresh = client.get(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-    ).get_json()["data"]
-    flipped = next(b for b in refresh if b["id"] == b1["id"])
-    assert flipped["status"] == "maintenance"
-
-
-# ---------- Phase 6: floor-scoped room renumbering ----------
-
-
-def test_renumber_rooms_rewrites_room_numbers_and_bed_codes(client, auth_headers):
-    prop = _make_property(client, auth_headers, "Renum P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    r1 = _make_room(client, auth_headers, floor["id"], "101", capacity=2)
-    r2 = _make_room(client, auth_headers, floor["id"], "102", capacity=1)
-    client.post(f"/api/v1/rooms/{r1['id']}/beds", headers=auth_headers, json={"bed_number": "1"})
-    client.post(f"/api/v1/rooms/{r1['id']}/beds", headers=auth_headers, json={"bed_number": "2"})
-    client.post(f"/api/v1/rooms/{r2['id']}/beds", headers=auth_headers, json={"bed_number": "1"})
-
-    resp = client.post(
-        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-rooms",
-        headers=auth_headers,
-        json={"room_prefix": "R"},
+        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-units",
+        headers=auth_headers, json={"unit_prefix": "R"},
     )
     assert resp.status_code == 200, resp.get_data(as_text=True)
     data = resp.get_json()["data"]
-    assert data["renamed"] == 2
-    # Mapping is positional (sorted by old room_number ASC).
-    diff = {d["room_id"]: d["new_room_number"] for d in data["diff"]}
-    assert diff[r1["id"]] == "R101"
-    assert diff[r2["id"]] == "R102"
-
-    # Bed codes are recomputed for every bed in the renamed rooms.
-    beds_r1 = client.get(f"/api/v1/rooms/{r1['id']}/beds", headers=auth_headers).get_json()["data"]
-    bed_codes = sorted(b["bed_code"] for b in beds_r1)
-    assert bed_codes == [
-        f"{prop['code']}-F1-RR101-B1",
-        f"{prop['code']}-F1-RR101-B2",
-    ]
+    assert data["renamed"] == 3
+    numbers = sorted(r["unit_number"] for r in data["units"])
+    assert numbers == ["R101", "R102", "R103"]
 
 
-def test_renumber_rooms_refuses_with_occupied_bed_unless_forced(app, client, auth_headers):
-    prop = _make_property(client, auth_headers, "Renum Occ P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=1)
-    bed = client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "1"},
-    ).get_json()["data"]
+def test_renumber_refuses_with_occupied_unit_unless_forced(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Force P", layout={
+        "floors": 1, "units_per_floor": 2,
+    })
+    floor = client.get(f"/api/v1/properties/{prop['id']}/floors",
+                       headers=auth_headers).get_json()["data"][0]
+    units = client.get(f"/api/v1/properties/{prop['id']}/units",
+                       headers=auth_headers).get_json()["data"]
+    client.post(f"/api/v1/units/{units[0]['id']}/status", headers=auth_headers,
+                json={"status": "occupied"})
 
-    # Flip the bed to "occupied" directly (Phase 6 doesn't need a full
-    # assignment txn for this guard test).
-    with app.app_context():
-        from app.extensions import db
-        from app.models import Bed
-        b = db.session.get(Bed, bed["id"])
-        b.status = "occupied"
-        db.session.commit()
-
-    # Without force -> 409.
-    resp = client.post(
-        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-rooms",
-        headers=auth_headers,
-        json={"room_prefix": "X"},
+    blocked = client.post(
+        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-units",
+        headers=auth_headers, json={"unit_prefix": "R"},
     )
-    assert resp.status_code == 409
-    body = resp.get_json()
-    assert body["details"]["occupied"] == 1
-    assert body["details"]["force_required"] is True
+    assert blocked.status_code == 409
+    assert blocked.get_json()["details"]["force_required"] is True
 
-    # With force -> 200 and the renumber proceeds.
-    resp2 = client.post(
-        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-rooms",
-        headers=auth_headers,
-        json={"room_prefix": "X", "force": True},
+    forced = client.post(
+        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-units",
+        headers=auth_headers, json={"unit_prefix": "R", "force": True},
     )
-    assert resp2.status_code == 200
-    assert resp2.get_json()["data"]["renamed"] == 1
+    assert forced.status_code == 200
+    assert forced.get_json()["data"]["renamed"] == 2
 
 
-def test_renumber_rooms_swap_does_not_collide_on_unique(client, auth_headers):
-    """Two rooms that effectively swap numbers via the new prefix must
-    survive the UNIQUE(room_number) constraint — proves the two-phase
-    rename works."""
-    prop = _make_property(client, auth_headers, "Renum Swap P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    # Start with weird out-of-order names so the deterministic algorithm
-    # has to actually move them.
-    _make_room(client, auth_headers, floor["id"], "B-102", capacity=1)
-    _make_room(client, auth_headers, floor["id"], "A-101", capacity=1)
+def test_renumber_no_op_when_numbers_already_match(client, auth_headers):
+    prop = _make_property(client, auth_headers, "NoOp P", layout={
+        "floors": 1, "units_per_floor": 2,
+    })
+    floor = client.get(f"/api/v1/properties/{prop['id']}/floors",
+                       headers=auth_headers).get_json()["data"][0]
+
     resp = client.post(
-        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-rooms",
-        headers=auth_headers,
-        json={"room_prefix": ""},
+        f"/api/v1/properties/{prop['id']}/floors/{floor['id']}/renumber-units",
+        headers=auth_headers, json={"unit_prefix": ""},
     )
     assert resp.status_code == 200
-    new_numbers = sorted(r["room_number"] for r in resp.get_json()["data"]["rooms"])
-    assert new_numbers == ["101", "102"]
-
-
-def test_room_blocked_reflected_in_property_summary(client, auth_headers):
-    """Phase 5b: room.occupancy_status change shows in the room totals."""
-    prop = _make_property(client, auth_headers, "Block P")
-    floor = _make_floor(client, auth_headers, prop["id"], "1")
-    room = _make_room(client, auth_headers, floor["id"], "101", capacity=1)
-    client.post(
-        f"/api/v1/rooms/{room['id']}/beds", headers=auth_headers,
-        json={"bed_number": "1"},
-    )
-
-    resp = client.post(
-        f"/api/v1/rooms/{room['id']}/status", headers=auth_headers,
-        json={"status": "blocked"},
-    )
-    assert resp.status_code == 200
-
-    summary = client.get(
-        f"/api/v1/properties/{prop['id']}/occupancy", headers=auth_headers,
-    ).get_json()["data"]
-    assert summary["rooms"]["blocked"] == 1
-    assert summary["rooms"]["total"] == 1
+    assert resp.get_json()["data"]["renamed"] == 0
