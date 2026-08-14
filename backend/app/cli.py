@@ -1,4 +1,4 @@
-import os
+﻿import os
 import click
 from flask import Flask
 
@@ -63,11 +63,11 @@ def _seed_super_user(role_index: dict[str, Role]) -> User:
         user.set_password(password)
         user.roles = [role_index["super_user"]] if "super_user" in role_index else []
         db.session.add(user)
-        click.echo(f"  → created super user '{username}' (password from SUPERUSER_PASSWORD or default 'ChangeMe123!')")
+        click.echo(f"  -> created super user '{username}' (password from SUPERUSER_PASSWORD or default 'ChangeMe123!')")
     else:
         user.is_super_user = True
         user.is_active = True
-        click.echo(f"  → super user '{username}' already exists; ensured flags")
+        click.echo(f"  -> super user '{username}' already exists; ensured flags")
     return user
 
 
@@ -181,7 +181,7 @@ def _seed_expense_categories() -> None:
         if category is not None:
             db.session.add(LedgerMapping(ledger_name=ledger, category_id=category.id))
     db.session.flush()
-    click.echo(f"  → {len(by_code)} categories, {len(LEDGER_ALIASES)} ledger mappings")
+    click.echo(f"  -> {len(by_code)} categories, {len(LEDGER_ALIASES)} ledger mappings")
 
 
 def register_commands(app: Flask) -> None:
@@ -751,11 +751,11 @@ def register_commands(app: Flask) -> None:
         """Seed permissions, roles, and the default super user."""
         click.echo("Seeding permissions...")
         perm_index = _seed_permissions()
-        click.echo(f"  → {len(perm_index)} permissions present")
+        click.echo(f"  -> {len(perm_index)} permissions present")
 
         click.echo("Seeding roles...")
         role_index = _seed_roles(perm_index)
-        click.echo(f"  → {len(role_index)} roles present")
+        click.echo(f"  -> {len(role_index)} roles present")
 
         click.echo("Seeding super user...")
         _seed_super_user(role_index)
@@ -773,7 +773,7 @@ def register_commands(app: Flask) -> None:
         click.echo("Seeding notification rules...")
         from .services import notification_rules as rules_service
         created = rules_service.seed_defaults()
-        click.echo(f"  → {created} rule(s) added (all disabled until you enable them)")
+        click.echo(f"  -> {created} rule(s) added (all disabled until you enable them)")
 
         db.session.commit()
         click.echo("Done.")

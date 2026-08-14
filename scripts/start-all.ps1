@@ -66,7 +66,7 @@ if ($redisUrl) {
 
 Write-Host "Starting Next.js frontend..." -ForegroundColor Cyan
 Start-InNewWindow "greentech-frontend" $frontend `
-    "npm start"
+    "npm start -- -p 3001"
 
 Write-Host ""
 Write-Host "Windows opened. Tail their output to confirm everything is up."
