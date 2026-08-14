@@ -63,11 +63,11 @@ def _seed_super_user(role_index: dict[str, Role]) -> User:
         user.set_password(password)
         user.roles = [role_index["super_user"]] if "super_user" in role_index else []
         db.session.add(user)
-        click.echo(f"  → created super user '{username}' (password from SUPERUSER_PASSWORD or default 'ChangeMe123!')")
+        click.echo(f"  -> created super user '{username}' (password from SUPERUSER_PASSWORD or default 'ChangeMe123!')")
     else:
         user.is_super_user = True
         user.is_active = True
-        click.echo(f"  → super user '{username}' already exists; ensured flags")
+        click.echo(f"  -> super user '{username}' already exists; ensured flags")
     return user
 
 
@@ -158,6 +158,40 @@ def _seed_property_types() -> None:
     db.session.flush()
 
 
+# code, name, is_facility, bulk_mode — the 14 values that used to be the
+# hardcoded UNIT_TYPES/FACILITY_TYPES sets in models/unit.py. "floors"
+# means the layout wizard walks floors x rooms-per-floor for this type;
+# "count" means it's a flat quantity on one dedicated floor (store,
+# shop...), no floor/rooms-per-floor breakdown.
+DEFAULT_UNIT_TYPES = [
+    ("room", "Room", False, "floors"),
+    ("flat_1bhk", "Flat — 1BHK", False, "floors"),
+    ("flat_2bhk", "Flat — 2BHK", False, "floors"),
+    ("floor", "Floor", False, "floors"),
+    ("villa", "Villa", False, "floors"),
+    ("kitchen", "Kitchen", True, "floors"),
+    ("bathroom", "Bathroom", True, "floors"),
+    ("play_area", "Play area", True, "floors"),
+    ("mess", "Mess", True, "floors"),
+    ("store", "Store", False, "count"),
+    ("shop", "Shop", False, "count"),
+    ("cafeteria", "Cafeteria", False, "count"),
+    ("supermarket", "Supermarket", False, "count"),
+    ("other", "Other", False, "count"),
+]
+
+
+def _seed_unit_types() -> None:
+    from .models import UnitType
+
+    by_code = {t.code: t for t in UnitType.query.all()}
+    for code, name, is_facility, bulk_mode in DEFAULT_UNIT_TYPES:
+        if code not in by_code:
+            db.session.add(UnitType(code=code, name=name, is_facility=is_facility,
+                                    bulk_mode=bulk_mode))
+    db.session.flush()
+
+
 def _seed_expense_categories() -> None:
     from .models import ExpenseCategory, LedgerMapping
 
@@ -181,7 +215,7 @@ def _seed_expense_categories() -> None:
         if category is not None:
             db.session.add(LedgerMapping(ledger_name=ledger, category_id=category.id))
     db.session.flush()
-    click.echo(f"  → {len(by_code)} categories, {len(LEDGER_ALIASES)} ledger mappings")
+    click.echo(f"  -> {len(by_code)} categories, {len(LEDGER_ALIASES)} ledger mappings")
 
 
 def register_commands(app: Flask) -> None:
@@ -606,6 +640,24 @@ def register_commands(app: Flask) -> None:
                 _models.GeneratedAgreement.__table__.create(bind=conn)
                 click.echo("  + generated_agreements")
 
+            # --- Unit Types master (replaces the hardcoded UNIT_TYPES /
+            # FACILITY_TYPES sets that used to live in models/unit.py).
+            # Seeded by `flask seed`.
+            if not insp.has_table("unit_types"):
+                from . import models as _models
+                _models.UnitType.__table__.create(bind=conn)
+                click.echo("  + unit_types")
+
+            if insp.has_table("units"):
+                col = next((c for c in insp.get_columns("units") if c["name"] == "unit_type"), None)
+                # SQLite reports no length on VARCHAR; only Postgres needs
+                # (and can do) an ALTER here.
+                if col is not None and bind.dialect.name == "postgresql":
+                    length = getattr(col.get("type"), "length", None)
+                    if length is not None and length < 32:
+                        conn.execute(text("ALTER TABLE units ALTER COLUMN unit_type TYPE VARCHAR(32)"))
+                        click.echo("  ~ units.unit_type widened to VARCHAR(32)")
+
         click.echo("Done.")
 
     @app.cli.group("landlord-dues")
@@ -751,11 +803,11 @@ def register_commands(app: Flask) -> None:
         """Seed permissions, roles, and the default super user."""
         click.echo("Seeding permissions...")
         perm_index = _seed_permissions()
-        click.echo(f"  → {len(perm_index)} permissions present")
+        click.echo(f"  -> {len(perm_index)} permissions present")
 
         click.echo("Seeding roles...")
         role_index = _seed_roles(perm_index)
-        click.echo(f"  → {len(role_index)} roles present")
+        click.echo(f"  -> {len(role_index)} roles present")
 
         click.echo("Seeding super user...")
         _seed_super_user(role_index)
@@ -766,6 +818,9 @@ def register_commands(app: Flask) -> None:
         click.echo("Seeding property types...")
         _seed_property_types()
 
+        click.echo("Seeding unit types...")
+        _seed_unit_types()
+
         click.echo("Seeding system settings...")
         from .services import settings as settings_service
         settings_service.seed_defaults()
@@ -773,7 +828,7 @@ def register_commands(app: Flask) -> None:
         click.echo("Seeding notification rules...")
         from .services import notification_rules as rules_service
         created = rules_service.seed_defaults()
-        click.echo(f"  → {created} rule(s) added (all disabled until you enable them)")
+        click.echo(f"  -> {created} rule(s) added (all disabled until you enable them)")
 
         db.session.commit()
         click.echo("Done.")

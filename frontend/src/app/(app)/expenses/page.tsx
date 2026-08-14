@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Upload, Wallet, ListTree, XCircle, Link2, Settings2 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -67,7 +68,6 @@ export default function ExpensesPage() {
   const [showExpense, setShowExpense] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [showCategories, setShowCategories] = useState(false);
   const [showVoidedExpenses, setShowVoidedExpenses] = useState(false);
   const [showVoidedPayments, setShowVoidedPayments] = useState(false);
   const [allocating, setAllocating] = useState<Expense | null>(null);
@@ -122,10 +122,10 @@ export default function ExpensesPage() {
           <input type="month" className={inputClass + " w-auto"} value={month}
             onChange={(e) => setMonth(e.target.value)} />
           <Can perm="expense.manage">
-            <button onClick={() => setShowCategories(true)}
+            <Link href="/settings?tab=expense"
               className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card/60 px-3 text-sm hover:bg-accent">
               <Settings2 className="h-4 w-4" /> Manage categories
-            </button>
+            </Link>
           </Can>
           <Can perm="expense.import">
             <button onClick={() => setShowImport(true)}
@@ -365,10 +365,6 @@ export default function ExpensesPage() {
       <ImportWizard open={showImport} properties={properties} categories={activeCategories}
         onClose={() => setShowImport(false)}
         onImported={async () => { setShowImport(false); await load(); }} />
-
-      <CategoriesDialog open={showCategories} categories={categories}
-        onClose={() => setShowCategories(false)}
-        onChanged={load} />
     </div>
   );
 }
@@ -718,136 +714,3 @@ function ExpenseVoidButton({ expense, onDone }: { expense: Expense; onDone: () =
   );
 }
 
-function CategoriesDialog({ open, categories, onClose, onChanged }: {
-  open: boolean; categories: Category[]; onClose: () => void; onChanged: () => void;
-}) {
-  const [showNew, setShowNew] = useState(false);
-  const [showDeactivated, setShowDeactivated] = useState(false);
-  const [newForm, setNewForm] = useState({ name: "", kind: "indirect", is_property_wise: false });
-  const [busy, setBusy] = useState<number | "new" | null>(null);
-  const visibleCategories = showDeactivated ? categories : categories.filter((c) => c.is_active);
-
-  const createCategory = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy("new");
-    try {
-      await api.post("/expenses/categories", newForm);
-      toast.success("Category created");
-      setNewForm({ name: "", kind: "indirect", is_property_wise: false });
-      setShowNew(false);
-      onChanged();
-    } catch (err: unknown) {
-      toast.error("Could not create category", errorMessage(err));
-    } finally { setBusy(null); }
-  };
-
-  const toggleActive = async (c: Category) => {
-    setBusy(c.id);
-    try {
-      await api.patch(`/expenses/categories/${c.id}`, { is_active: !c.is_active });
-      onChanged();
-    } catch (err: unknown) {
-      toast.error("Could not update category", errorMessage(err));
-    } finally { setBusy(null); }
-  };
-
-  const renameCategory = async (c: Category, name: string) => {
-    if (!name.trim() || name === c.name) return;
-    setBusy(c.id);
-    try {
-      await api.patch(`/expenses/categories/${c.id}`, { name });
-      onChanged();
-    } catch (err: unknown) {
-      toast.error("Could not rename category", errorMessage(err));
-    } finally { setBusy(null); }
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title="Expense categories" size="lg">
-      <div className="space-y-4">
-        <div className="flex justify-between items-center gap-2 flex-wrap">
-          <p className="text-xs text-muted-foreground">
-            Property costs feed a property&apos;s P&amp;L; company overhead stays at company level.
-          </p>
-          <div className="flex items-center gap-3">
-            <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap">
-              <input type="checkbox" checked={showDeactivated} onChange={(e) => setShowDeactivated(e.target.checked)} />
-              Show deactivated
-            </label>
-            <button type="button" onClick={() => setShowNew((v) => !v)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card/60 px-2.5 text-xs hover:bg-accent">
-              <Plus className="h-3.5 w-3.5" /> New category
-            </button>
-          </div>
-        </div>
-
-        {showNew && (
-          <form onSubmit={createCategory} className="rounded-lg border border-border bg-card/40 p-3 grid grid-cols-2 gap-2">
-            <Field label="Name" span={2}>
-              <input required className={inputClass} value={newForm.name}
-                onChange={(e) => setNewForm((f) => ({ ...f, name: e.target.value }))} />
-            </Field>
-            <Field label="Kind">
-              <select className={selectClass} value={newForm.kind}
-                onChange={(e) => setNewForm((f) => ({ ...f, kind: e.target.value }))}>
-                <option value="direct">Property cost (direct)</option>
-                <option value="indirect">Company overhead (indirect)</option>
-              </select>
-            </Field>
-            <Field label="Property-wise">
-              <label className="flex items-center gap-2 h-9">
-                <input type="checkbox" checked={newForm.is_property_wise}
-                  onChange={(e) => setNewForm((f) => ({ ...f, is_property_wise: e.target.checked }))} />
-                <span className="text-sm">Should name a property</span>
-              </label>
-            </Field>
-            <div className="col-span-2 flex justify-end">
-              <button type="submit" disabled={busy === "new"}
-                className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60">
-                {busy === "new" ? "Creating…" : "Create"}
-              </button>
-            </div>
-          </form>
-        )}
-
-        <div className="glass rounded-xl overflow-hidden max-h-[420px] overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs text-muted-foreground border-b border-border sticky top-0 bg-card/80 backdrop-blur">
-              <tr>
-                <th className="py-2 px-3">Code</th>
-                <th className="py-2 px-3">Name</th>
-                <th className="py-2 px-3">Kind</th>
-                <th className="py-2 px-3">Property-wise</th>
-                <th className="py-2 px-3 text-right">Active</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleCategories.map((c) => (
-                <tr key={c.id} className={"border-b border-border/60 " + (!c.is_active ? "opacity-50" : "")}>
-                  <td className="py-2 px-3 font-mono text-xs">{c.code}</td>
-                  <td className="py-2 px-3">
-                    <input
-                      defaultValue={c.name}
-                      disabled={busy === c.id}
-                      onBlur={(e) => renameCategory(c, e.target.value)}
-                      className="bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-ring rounded px-1 -mx-1 w-full"
-                    />
-                  </td>
-                  <td className="py-2 px-3 capitalize text-xs text-muted-foreground">{c.kind}</td>
-                  <td className="py-2 px-3 text-xs">{c.is_property_wise ? "Yes" : "—"}</td>
-                  <td className="py-2 px-3 text-right">
-                    <button type="button" onClick={() => toggleActive(c)} disabled={busy === c.id}
-                      className={"rounded-full px-2 py-0.5 text-xs " +
-                        (c.is_active ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground")}>
-                      {c.is_active ? "Active" : "Inactive"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </Modal>
-  );
-}

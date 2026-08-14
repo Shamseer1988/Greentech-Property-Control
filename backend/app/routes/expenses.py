@@ -8,7 +8,7 @@ from ..models import (
     Expense, ExpenseCategory, ExpenseImportBatch, LandlordPayment, LedgerMapping,
 )
 from ..services import (
-    expenses as expense_service, landlord_rent as landlord_rent_service,
+    codes, expenses as expense_service, landlord_rent as landlord_rent_service,
     pnl_import as import_service,
 )
 from ..utils.auth import require_permission, current_user
@@ -39,7 +39,11 @@ def list_categories():
     query = ExpenseCategory.query
     if request.args.get("active_only") in ("1", "true", "yes"):
         query = query.filter_by(is_active=True)
-    rows = query.order_by(ExpenseCategory.kind.asc(), ExpenseCategory.name.asc()).all()
+    query = query.order_by(ExpenseCategory.kind.asc(), ExpenseCategory.name.asc())
+    if request.args.get("page") or request.args.get("per_page"):
+        rows, meta = paginate(query, default_per_page=25, max_per_page=200)
+        return success_response(data=[r.to_dict() for r in rows], meta=meta)
+    rows = query.all()
     return success_response(data=[r.to_dict() for r in rows], meta={"count": len(rows)})
 
 
@@ -48,7 +52,8 @@ def list_categories():
 def create_category():
     payload = request.get_json(silent=True) or {}
     name = (payload.get("name") or "").strip()
-    code = (payload.get("code") or "").strip() or name.upper().replace(" ", "_")[:40]
+    code = (payload.get("code") or "").strip() or codes.next_code(
+        ExpenseCategory, codes.prefix_for("expense_category"))
     if not name:
         return error_response("name is required", 400)
     if ExpenseCategory.query.filter(db.func.lower(ExpenseCategory.code) == code.lower()).first():
@@ -79,6 +84,7 @@ def update_category(category_id: int):
             kind=payload.get("kind"),
             is_property_wise=payload.get("is_property_wise"),
             is_active=payload.get("is_active"),
+            remarks=payload.get("remarks"),
             actor=actor,
         )
     except expense_service.ExpenseError as exc:

@@ -22,6 +22,35 @@ FACILITY_TYPES = {"kitchen", "bathroom", "play_area", "mess"}
 
 UNIT_STATUSES = {"empty", "occupied", "maintenance", "blocked"}
 
+# How a unit type's units get bulk-created by the property layout wizard:
+# "floors" walks floors x rooms-per-floor (room, flat_1bhk, villa, the
+# facility types...); "count" is a flat quantity on one dedicated floor
+# (store, shop, cafeteria...) with no floor/rooms-per-floor breakdown.
+BULK_MODES = {"floors", "count"}
+
+
+class UnitType(BaseModel):
+    """A unit type the operator can pick when creating/generating units.
+
+    Mirrors `PropertyType`/`ExpenseCategory` — a user-manageable master,
+    deactivate-only, never hard-deleted. `Unit.unit_type` stores the
+    `code`, not an FK, matching the free-text column that was already
+    there; this table only replaces the hardcoded `UNIT_TYPES`/
+    `FACILITY_TYPES` sets that used to validate and classify it.
+    """
+
+    __tablename__ = "unit_types"
+
+    code = Column(String(32), unique=True, nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    is_facility = Column(Boolean, default=False, nullable=False)
+    bulk_mode = Column(String(8), default="floors", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    remarks = Column(Text, nullable=True)
+
+    def to_dict(self, exclude=None):
+        return super().to_dict(exclude=exclude)
+
 
 class Unit(BaseModel):
     """A lettable or facility unit inside a property."""
@@ -33,7 +62,7 @@ class Unit(BaseModel):
 
     unit_number = Column(String(32), nullable=False)
     unit_name = Column(String(80), nullable=True)
-    unit_type = Column(String(16), default="room", nullable=False)
+    unit_type = Column(String(32), default="room", nullable=False)
     # Free text on purpose — a room is described by dimensions ("4/4",
     # meaning 4m x 4m), a store/shop by floor area ("450 Sqm"). Different
     # unit types are sized in genuinely different units; a single numeric

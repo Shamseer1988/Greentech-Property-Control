@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouteParams } from "@/lib/use-route-params";
 import { useSearchParams } from "next/navigation";
@@ -18,6 +18,7 @@ import { toast, errorMessage } from "@/components/ui/toast";
 import { AttachmentsTab } from "@/components/attachments-tab";
 import { PropertyMoneyTab } from "@/components/property-money-tab";
 import { usePropertyTypes } from "@/lib/use-property-types";
+import { useUnitTypes } from "@/lib/use-unit-types";
 
 type Property = {
   id: number;
@@ -531,13 +532,6 @@ type Unit = {
   remarks: string | null;
 };
 
-const UNIT_TYPES = [
-  "room", "flat_1bhk", "flat_2bhk", "floor", "villa",
-  "store", "shop", "cafeteria", "supermarket",
-  "kitchen", "bathroom", "play_area", "mess", "other",
-];
-const FACILITY_TYPES = new Set(["kitchen", "bathroom", "play_area", "mess"]);
-
 const UNIT_STATUS_TONE: Record<string, string> = {
   empty: "bg-muted text-muted-foreground",
   occupied: "bg-emerald-500/10 text-emerald-600",
@@ -834,6 +828,9 @@ function UnitsTab({ propertyId }: { propertyId: number }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Unit | null>(null);
   const [createInFloorId, setCreateInFloorId] = useState<number | null>(null);
+  const { types: unitTypes } = useUnitTypes();
+  const facilityCodes = useMemo(
+    () => new Set(unitTypes.filter((t) => t.is_facility).map((t) => t.code)), [unitTypes]);
 
   const load = async () => {
     setLoading(true);
@@ -911,11 +908,11 @@ function UnitsTab({ propertyId }: { propertyId: number }) {
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold">
-                      {FACILITY_TYPES.has(r.unit_type) ? "" : "Unit "}{r.unit_number}{r.unit_name ? ` · ${r.unit_name}` : ""}
+                      {facilityCodes.has(r.unit_type) ? "" : "Unit "}{r.unit_number}{r.unit_name ? ` · ${r.unit_name}` : ""}
                     </div>
                     <div className="text-xs text-muted-foreground capitalize">
                       Floor {f?.floor_number} · {r.unit_type.replaceAll("_", " ")}
-                      {FACILITY_TYPES.has(r.unit_type) && (r.is_shared_facility ? " · shared" : " · dedicated")}
+                      {facilityCodes.has(r.unit_type) && (r.is_shared_facility ? " · shared" : " · dedicated")}
                     </div>
                   </div>
                   <span className={"rounded-full px-2 py-0.5 text-xs " + (UNIT_STATUS_TONE[r.occupancy_status] ?? "bg-muted text-muted-foreground")}>
@@ -955,6 +952,7 @@ function UnitsTab({ propertyId }: { propertyId: number }) {
         floorId={createInFloorId}
         floors={floors}
         editing={editing}
+        unitTypes={unitTypes}
         onClose={() => setShowForm(false)}
         onSaved={async () => { setShowForm(false); await load(); }}
       />
@@ -962,8 +960,9 @@ function UnitsTab({ propertyId }: { propertyId: number }) {
   );
 }
 
-function UnitDialog({ open, floorId, floors, editing, onClose, onSaved }: {
+function UnitDialog({ open, floorId, floors, editing, unitTypes, onClose, onSaved }: {
   open: boolean; floorId: number | null; floors: Floor[]; editing: Unit | null;
+  unitTypes: { code: string; name: string; is_facility: boolean }[];
   onClose: () => void; onSaved: () => void;
 }) {
   const [form, setForm] = useState<Record<string, unknown>>({});
@@ -978,7 +977,7 @@ function UnitDialog({ open, floorId, floors, editing, onClose, onSaved }: {
   }, [editing, open]);
 
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
-  const isFacility = FACILITY_TYPES.has(String(form.unit_type ?? ""));
+  const isFacility = unitTypes.find((t) => t.code === String(form.unit_type ?? ""))?.is_facility ?? false;
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1013,7 +1012,7 @@ function UnitDialog({ open, floorId, floors, editing, onClose, onSaved }: {
           <Field label="Name"><input className={inputClass} value={String(form.unit_name ?? "")} onChange={(e) => set("unit_name", e.target.value)} placeholder="Optional" /></Field>
           <Field label="Type">
             <select className={selectClass} value={String(form.unit_type ?? "room")} onChange={(e) => set("unit_type", e.target.value)}>
-              {UNIT_TYPES.map((t) => <option key={t} value={t}>{t.replaceAll("_", " ")}</option>)}
+              {unitTypes.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
             </select>
           </Field>
           <Field label="Size">

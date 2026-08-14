@@ -6,7 +6,7 @@ from .client import Client
 from .property import Property, PropertyAgreement, PropertyType, LandlordContract
 from .attachment import Attachment, AttachmentLink
 from .floor import Floor
-from .unit import Unit
+from .unit import Unit, UnitType
 from .contract import (
     ClientContract, ContractUnit, ContractAmendment, Cheque, ChequeEvent,
 )
@@ -48,6 +48,7 @@ __all__ = [
     "AttachmentLink",
     "Floor",
     "Unit",
+    "UnitType",
     "ClientContract",
     "ContractUnit",
     "ContractAmendment",

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ToggleLeft, ToggleRight, Save, KeyRound, RefreshCw,
-  Building2, Settings as Cog, Hash, CheckSquare, Bell, Mail,
+  Building2, Settings as Cog, Tag, Hash, CheckSquare, Bell, Mail,
   Palette, FileUp, Lock, HardDrive, ClipboardList, Send, Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -12,6 +13,8 @@ import { CompanyLogoUploader } from "@/components/company-logo-uploader";
 import { BackupPanel } from "@/components/backup-panel";
 import { NotificationRulesPanel, ConnectionTest } from "@/components/notification-rules-panel";
 import { PropertyTypesPanel } from "@/components/property-types-panel";
+import { UnitTypesPanel } from "@/components/unit-types-panel";
+import { ExpenseCategoriesPanel } from "@/components/expense-categories-panel";
 import { inputClass, selectClass, textareaClass } from "@/components/ui/dialog";
 import { toast, errorMessage } from "@/components/ui/toast";
 
@@ -38,6 +41,7 @@ type Section = {
 const CATEGORY_ICON: Record<string, typeof Cog> = {
   company: Building2,
   property: Cog,
+  expense: Tag,
   numbering: Hash,
   approval: CheckSquare,
   alerts: Bell,
@@ -53,6 +57,7 @@ const CATEGORY_ICON: Record<string, typeof Cog> = {
 };
 
 export default function SettingsPage() {
+  const searchParams = useSearchParams();
   const [sections, setSections] = useState<Section[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
@@ -65,7 +70,10 @@ export default function SettingsPage() {
       const r = await api.get("/settings/catalog");
       const fresh: Section[] = r.data.data.sections;
       setSections(fresh);
-      setActiveTab((prev) => prev ?? (fresh[0]?.category ?? null));
+      const wanted = searchParams.get("tab");
+      const initial = (wanted && fresh.some((s) => s.category === wanted))
+        ? wanted : (fresh[0]?.category ?? null);
+      setActiveTab((prev) => prev ?? initial);
     } finally { setLoading(false); }
   };
 
@@ -200,7 +208,13 @@ export default function SettingsPage() {
                       onChange={(v) => setDraft(s.key, v)}
                     />
                   ))}
-                {active.category === "property" && <PropertyTypesPanel />}
+                {active.category === "property" && (
+                  <>
+                    <PropertyTypesPanel />
+                    <UnitTypesPanel />
+                  </>
+                )}
+                {active.category === "expense" && <ExpenseCategoriesPanel />}
                 {active.category === "backup" && <BackupPanel />}
                 {active.category === "email" && <ConnectionTest kind="email" />}
                 {active.category === "telegram" && <ConnectionTest kind="telegram" />}
