@@ -509,4 +509,75 @@ def test_allocating_an_imported_cost_moves_it_into_the_property(client, auth_hea
 def test_expense_endpoints_require_auth(client):
     assert client.get("/api/v1/expenses").status_code == 401
     assert client.get("/api/v1/expenses/pnl").status_code == 401
+
+
+# ------------------------------------------------------------ categories
+
+def test_new_category_gets_a_sequential_code(client, auth_headers):
+    """New categories get an EX-0001-style sequential code; the ~31
+    seeded categories keep their own human-readable codes (RENT_PAID,
+    OTHER_INCOME...) untouched, since P&L/report logic and the import
+    auto-mapper compare against those literal strings."""
+    first = client.post("/api/v1/expenses/categories", headers=auth_headers,
+                        json={"name": "Consultancy Fees"})
+    assert first.status_code == 201, first.get_data(as_text=True)
+    assert first.get_json()["data"]["code"] == "EX-0001"
+
+    second = client.post("/api/v1/expenses/categories", headers=auth_headers,
+                         json={"name": "Legal Retainer"})
+    assert second.get_json()["data"]["code"] == "EX-0002"
+
+    # A pre-existing seeded category is untouched by the new generator.
+    seeded = client.get("/api/v1/expenses/categories", headers=auth_headers).get_json()["data"]
+    codes = {c["code"] for c in seeded}
+    assert "RENT_PAID" in codes
+    assert not any(c.startswith("EX-") for c in codes if c not in {"EX-0001", "EX-0002"})
+
+
+def test_category_edit_covers_kind_and_property_wise(client, auth_headers):
+    created = client.post("/api/v1/expenses/categories", headers=auth_headers,
+                          json={"name": "Misc", "kind": "indirect", "is_property_wise": False})
+    category = created.get_json()["data"]
+
+    updated = client.patch(f"/api/v1/expenses/categories/{category['id']}", headers=auth_headers,
+                           json={"name": "Miscellaneous", "kind": "direct",
+                                 "is_property_wise": True, "remarks": "renamed for clarity"})
+    assert updated.status_code == 200
+    data = updated.get_json()["data"]
+    assert data["name"] == "Miscellaneous"
+    assert data["kind"] == "direct"
+    assert data["is_property_wise"] is True
+    assert data["remarks"] == "renamed for clarity"
+
+
+def test_category_deactivate_and_reactivate(client, auth_headers):
+    created = client.post("/api/v1/expenses/categories", headers=auth_headers,
+                          json={"name": "Seasonal Cost"}).get_json()["data"]
+
+    off = client.patch(f"/api/v1/expenses/categories/{created['id']}", headers=auth_headers,
+                       json={"is_active": False})
+    assert off.get_json()["data"]["is_active"] is False
+
+    active_only = client.get("/api/v1/expenses/categories?active_only=1",
+                             headers=auth_headers).get_json()["data"]
+    assert created["code"] not in {c["code"] for c in active_only}
+
+    on = client.patch(f"/api/v1/expenses/categories/{created['id']}", headers=auth_headers,
+                      json={"is_active": True})
+    assert on.get_json()["data"]["is_active"] is True
+
+
+def test_category_list_paginates_when_requested(client, auth_headers):
+    for i in range(3):
+        client.post("/api/v1/expenses/categories", headers=auth_headers,
+                   json={"name": f"Paged Category {i}"})
+
+    unpaginated = client.get("/api/v1/expenses/categories", headers=auth_headers).get_json()
+    assert "total_pages" not in unpaginated["meta"]
+
+    paginated = client.get("/api/v1/expenses/categories?page=1&per_page=5",
+                           headers=auth_headers).get_json()
+    assert paginated["meta"]["per_page"] == 5
+    assert len(paginated["data"]) == 5
+    assert paginated["meta"]["total_count"] >= 3
     assert client.post("/api/v1/expenses/import/preview").status_code == 401

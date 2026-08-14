@@ -16,6 +16,7 @@ import { toast, errorMessage } from "@/components/ui/toast";
 import { Skeleton, EmptyState } from "@/components/ui/states";
 import { useDebouncedValue } from "@/lib/use-debounce";
 import { usePropertyTypes } from "@/lib/use-property-types";
+import { useUnitTypes } from "@/lib/use-unit-types";
 import { keys } from "@/lib/query-keys";
 
 const PAGE_SIZE_OPTIONS = [12, 24, 48, 96];
@@ -265,8 +266,6 @@ function Stat({ label, value }: { label: string; value: number | null }) {
 
 type LandlordOption = { id: number; code: string; name: string };
 
-const UNIT_TYPE_OPTIONS = ["room", "flat_1bhk", "flat_2bhk", "store", "shop"];
-
 const MAX_FLOORS = 50;
 const MAX_UPF = 100;
 const MAX_STORES = 50;
@@ -291,32 +290,43 @@ const DEFAULT_LAYOUT: LayoutSpec = {
 };
 
 /** One building inside a compound — a wing, a block, a standalone
- * villa on a shared plot. Each gets its own floor count, rooms per
- * floor and store count, exactly the breakdown a landlord agreement
- * itemises building by building. */
+ * villa on a shared plot. Which fields apply depends on the selected
+ * unit type's generation mode (see Unit Types under Settings → Property):
+ * "floors" types (room, villa…) walk floors x rooms-per-floor; "count"
+ * types (store, shop…) are a flat quantity on one dedicated floor, with
+ * an optional mezzanine unit and/or one linked room per unit. A building
+ * never mixes the two shapes — the chosen type alone decides which
+ * fields render, so a store-type building never shows a stray Floors
+ * field, and a room-type building never gets a bolted-on store count. */
 type BuildingSpec = {
   key: string;           // stable React key, not sent to the API
   code: string;           // short label used in floor/unit numbers — "A" if left blank
   label: string;
+  unit_type: string;
+  // "floors" mode:
   floors: number;
   units_per_floor: number;
-  store_count: number;
   ground_floor: boolean;
-  default_unit_type: string;
+  // "count" mode:
+  unit_count: number;
+  with_mezzanine: boolean;
+  room_with_store: boolean;
 };
 
 let buildingSeq = 0;
-function newBuilding(index: number): BuildingSpec {
+function newBuilding(index: number, defaultUnitType = "room"): BuildingSpec {
   buildingSeq += 1;
   return {
     key: `b${buildingSeq}`,
     code: "",
     label: `Building ${String.fromCharCode(65 + (index % 26))}`,
+    unit_type: defaultUnitType,
     floors: 1,
     units_per_floor: 4,
-    store_count: 0,
     ground_floor: false,
-    default_unit_type: "room",
+    unit_count: 0,
+    with_mezzanine: false,
+    room_with_store: false,
   };
 }
 
@@ -337,6 +347,10 @@ type StructureMode = "single" | "compound";
 function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
   const router = useRouter();
   const { types: propertyTypes } = usePropertyTypes();
+  const { types: unitTypes } = useUnitTypes();
+  const unitTypeByCode = useMemo(
+    () => Object.fromEntries(unitTypes.map((t) => [t.code, t])), [unitTypes]);
+  const bulkModeFor = (code: string) => unitTypeByCode[code]?.bulk_mode ?? "floors";
   const [step, setStep] = useState<Step>("details");
   const [form, setForm] = useState<Record<string, unknown>>({ property_type: "full_building", ownership_type: "rented" });
   const [landlords, setLandlords] = useState<LandlordOption[]>([]);
@@ -375,21 +389,35 @@ function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: ()
     ...b,
     floors: clamp(b.floors, 1, MAX_FLOORS),
     units_per_floor: clamp(b.units_per_floor, 1, MAX_UPF),
-    store_count: clamp(b.store_count, 0, MAX_STORES),
+    unit_count: clamp(b.unit_count, 0, MAX_STORES),
     resolvedCode: b.code.trim().toUpperCase() || letterFor(i),
   })), [buildings]);
 
   const totals = useMemo(() => {
     if (mode === "compound") {
-      return safeBuildings.reduce((acc, b) => ({
-        buildings: acc.buildings + 1,
-        floors: acc.floors + b.floors + (b.store_count > 0 ? 1 : 0),
-        rooms: acc.rooms + b.floors * b.units_per_floor,
-        stores: acc.stores + b.store_count,
-      }), { buildings: 0, floors: 0, rooms: 0, stores: 0 });
+      return safeBuildings.reduce((acc, b) => {
+        if (bulkModeFor(b.unit_type) === "floors") {
+          const rooms = b.floors * b.units_per_floor;
+          return {
+            buildings: acc.buildings + 1, floors: acc.floors + b.floors,
+            rooms: acc.rooms + rooms, stores: acc.stores, units: acc.units + rooms,
+          };
+        }
+        const storeUnits = b.unit_count;
+        const roomUnits = b.room_with_store ? b.unit_count : 0;
+        const mezzUnits = b.with_mezzanine ? 1 : 0;
+        const hasFloor = b.unit_count > 0 || b.with_mezzanine;
+        return {
+          buildings: acc.buildings + 1, floors: acc.floors + (hasFloor ? 1 : 0),
+          rooms: acc.rooms + roomUnits, stores: acc.stores + storeUnits,
+          units: acc.units + storeUnits + roomUnits + mezzUnits,
+        };
+      }, { buildings: 0, floors: 0, rooms: 0, stores: 0, units: 0 });
     }
-    return { buildings: 1, floors: safe.floors, rooms: safe.floors * safe.units_per_floor, stores: 0 };
-  }, [mode, safeBuildings, safe]);
+    const rooms = safe.floors * safe.units_per_floor;
+    return { buildings: 1, floors: safe.floors, rooms, stores: 0, units: rooms };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, safeBuildings, safe, unitTypeByCode]);
 
   const codesClash = useMemo(() => {
     const seen = new Set<string>();
@@ -419,15 +447,16 @@ function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: ()
       if (genLayout) {
         payload.layout = mode === "compound"
           ? {
-              buildings: safeBuildings.map((b) => ({
-                code: b.code.trim() || undefined,
-                label: b.label.trim() || undefined,
-                floors: b.floors,
-                units_per_floor: b.units_per_floor,
-                store_count: b.store_count,
-                ground_floor: b.ground_floor,
-                default_unit_type: b.default_unit_type,
-              })),
+              buildings: safeBuildings.map((b) => {
+                const base = {
+                  code: b.code.trim() || undefined,
+                  label: b.label.trim() || undefined,
+                  unit_type: b.unit_type,
+                };
+                return bulkModeFor(b.unit_type) === "floors"
+                  ? { ...base, floors: b.floors, units_per_floor: b.units_per_floor, ground_floor: b.ground_floor }
+                  : { ...base, unit_count: b.unit_count, with_mezzanine: b.with_mezzanine, room_with_store: b.room_with_store };
+              }),
             }
           : {
               floors: safe.floors,
@@ -465,8 +494,8 @@ function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: ()
     <Modal open={open} onClose={onClose} title="New property" icon={Building2}
       description={step === "details"
         ? "Where it is and who it belongs to."
-        : "How many rooms and stores, and whether it's one building or several."}
-      size={step === "structure" && mode === "compound" ? "xl" : "lg"}>
+        : "Pick a unit type per building, then fill in what it needs."}
+      size={step === "structure" && mode === "compound" ? "2xl" : "lg"}>
       <div className="mb-5 flex items-center gap-2 text-xs">
         <StepPill active={step === "details"} done={step === "structure"} label="Details" number={1} />
         <div className="h-px flex-1 bg-border" />
@@ -573,7 +602,7 @@ function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: ()
                       <Field label="Default unit type">
                         <select className={selectClass} value={layout.default_unit_type}
                           onChange={(e) => setL("default_unit_type", e.target.value)}>
-                          {UNIT_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t.replaceAll("_", " ")}</option>)}
+                          {unitTypes.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
                         </select>
                       </Field>
                     </div>
@@ -585,52 +614,77 @@ function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: ()
                   </>
                 ) : (
                   <>
-                    <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
-                      {safeBuildings.map((b, i) => (
-                        <div key={b.key} className="rounded-lg border border-border bg-background/40 p-3 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className="h-6 w-6 shrink-0 rounded-md bg-primary/10 text-primary text-xs font-semibold grid place-items-center">
-                              {b.resolvedCode}
-                            </span>
-                            <input className={inputClass + " h-8"} value={buildings[i].label}
-                              placeholder={`Building ${b.resolvedCode}`}
-                              onChange={(e) => setB(b.key, "label", e.target.value)} />
-                            <input className={inputClass + " h-8 w-20 shrink-0"} value={buildings[i].code}
-                              placeholder="code" maxLength={4}
-                              onChange={(e) => setB(b.key, "code", e.target.value)} />
-                            <button type="button" onClick={() => removeBuilding(b.key)}
-                              disabled={buildings.length <= 1}
-                              className="h-8 w-8 shrink-0 rounded-md grid place-items-center text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30 disabled:hover:bg-transparent">
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                    <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                      {safeBuildings.map((b, i) => {
+                        const bulkMode = bulkModeFor(b.unit_type);
+                        return (
+                          <div key={b.key} className="rounded-lg border border-border bg-background/40 p-3 space-y-3">
+                            <div className="flex items-center gap-2">
+                              <span className="h-6 w-6 shrink-0 rounded-md bg-primary/10 text-primary text-xs font-semibold grid place-items-center">
+                                {b.resolvedCode}
+                              </span>
+                              <input className={inputClass + " h-8"} value={buildings[i].label}
+                                placeholder={`Building ${b.resolvedCode}`}
+                                onChange={(e) => setB(b.key, "label", e.target.value)} />
+                              <input className={inputClass + " h-8 w-20 shrink-0"} value={buildings[i].code}
+                                placeholder="code" maxLength={4}
+                                onChange={(e) => setB(b.key, "code", e.target.value)} />
+                              <button type="button" onClick={() => removeBuilding(b.key)}
+                                disabled={buildings.length <= 1}
+                                className="h-8 w-8 shrink-0 rounded-md grid place-items-center text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30 disabled:hover:bg-transparent">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                              <MiniField label="Unit type">
+                                <select className={selectClass + " h-8"} value={buildings[i].unit_type}
+                                  onChange={(e) => setB(b.key, "unit_type", e.target.value)}>
+                                  {unitTypes.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
+                                </select>
+                              </MiniField>
+                              {bulkMode === "floors" ? (
+                                <>
+                                  <MiniField label="Floors">
+                                    <input type="number" min={1} max={MAX_FLOORS} className={inputClass + " h-8"}
+                                      value={buildings[i].floors} onChange={(e) => setB(b.key, "floors", Number(e.target.value))} />
+                                  </MiniField>
+                                  <MiniField label="Rooms / floor">
+                                    <input type="number" min={1} max={MAX_UPF} className={inputClass + " h-8"}
+                                      value={buildings[i].units_per_floor} onChange={(e) => setB(b.key, "units_per_floor", Number(e.target.value))} />
+                                  </MiniField>
+                                </>
+                              ) : (
+                                <MiniField label="Number of units">
+                                  <input type="number" min={0} max={MAX_STORES} className={inputClass + " h-8"}
+                                    value={buildings[i].unit_count} onChange={(e) => setB(b.key, "unit_count", Number(e.target.value))} />
+                                </MiniField>
+                              )}
+                            </div>
+
+                            {bulkMode === "floors" ? (
+                              <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                <input type="checkbox" checked={buildings[i].ground_floor}
+                                  onChange={(e) => setB(b.key, "ground_floor", e.target.checked)} />
+                                First floor becomes “G”
+                              </label>
+                            ) : (
+                              <div className="flex items-center gap-4">
+                                <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                  <input type="checkbox" checked={buildings[i].with_mezzanine}
+                                    onChange={(e) => setB(b.key, "with_mezzanine", e.target.checked)} />
+                                  Include mezzanine
+                                </label>
+                                <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                  <input type="checkbox" checked={buildings[i].room_with_store}
+                                    onChange={(e) => setB(b.key, "room_with_store", e.target.checked)} />
+                                  Room with store
+                                </label>
+                              </div>
+                            )}
                           </div>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                            <MiniField label="Floors">
-                              <input type="number" min={1} max={MAX_FLOORS} className={inputClass + " h-8"}
-                                value={buildings[i].floors} onChange={(e) => setB(b.key, "floors", Number(e.target.value))} />
-                            </MiniField>
-                            <MiniField label="Rooms / floor">
-                              <input type="number" min={1} max={MAX_UPF} className={inputClass + " h-8"}
-                                value={buildings[i].units_per_floor} onChange={(e) => setB(b.key, "units_per_floor", Number(e.target.value))} />
-                            </MiniField>
-                            <MiniField label="Stores">
-                              <input type="number" min={0} max={MAX_STORES} className={inputClass + " h-8"}
-                                value={buildings[i].store_count} onChange={(e) => setB(b.key, "store_count", Number(e.target.value))} />
-                            </MiniField>
-                            <MiniField label="Unit type">
-                              <select className={selectClass + " h-8"} value={buildings[i].default_unit_type}
-                                onChange={(e) => setB(b.key, "default_unit_type", e.target.value)}>
-                                {UNIT_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t.replaceAll("_", " ")}</option>)}
-                              </select>
-                            </MiniField>
-                          </div>
-                          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-                            <input type="checkbox" checked={buildings[i].ground_floor}
-                              onChange={(e) => setB(b.key, "ground_floor", e.target.checked)} />
-                            First floor becomes “G”
-                          </label>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     <button type="button" onClick={addBuilding} disabled={buildings.length >= MAX_BUILDINGS}
@@ -649,7 +703,7 @@ function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: ()
                       <span><span className="font-semibold">{totals.floors}</span> floor{totals.floors === 1 ? "" : "s"}</span>
                       <span><span className="font-semibold">{totals.rooms}</span> rooms</span>
                       <span><span className="font-semibold">{totals.stores}</span> stores</span>
-                      <span className="text-muted-foreground">= {totals.rooms + totals.stores} units total</span>
+                      <span className="text-muted-foreground">= {totals.units} units total</span>
                     </div>
                   </>
                 )}
@@ -666,7 +720,7 @@ function PropertyDialog({ open, onClose, onSaved }: { open: boolean; onClose: ()
               className="h-9 inline-flex items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
               <Sparkles className="h-4 w-4" />
               {busy ? "Saving…" : genLayout
-                ? `Create + ${totals.rooms + totals.stores} units`
+                ? `Create + ${totals.units} units`
                 : "Create"}
             </button>
           </div>

@@ -226,27 +226,30 @@ def test_create_without_layout_leaves_property_empty(client, auth_headers):
 # ---------------------------------------------------------- compounds
 
 def test_compound_builds_every_building(client, auth_headers):
+    # A building's shape now comes entirely from its `unit_type`'s
+    # bulk_mode — a "room" building never gets a bolted-on store count,
+    # and a "store" building gets its own dedicated building instead.
     prop = _make_property(client, auth_headers, "Compound P", layout={
         "buildings": [
-            {"code": "A", "floors": 2, "units_per_floor": 3, "store_count": 1},
-            {"code": "B", "floors": 1, "units_per_floor": 4},
+            {"code": "A", "unit_type": "room", "floors": 2, "units_per_floor": 3},
+            {"code": "B", "unit_type": "store", "unit_count": 1},
         ],
     })
     generated = prop["layout_generated"]
     assert generated["buildings"] == 2
-    assert generated["rooms"] == 2 * 3 + 1 * 4          # 6 + 4
+    assert generated["rooms"] == 2 * 3          # 6
     assert generated["stores"] == 1
     assert generated["units"] == generated["rooms"] + generated["stores"]
 
     floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
                         headers=auth_headers).get_json()["data"]
     numbers = sorted(f["floor_number"] for f in floors)
-    assert numbers == ["A-1", "A-2", "A-S", "B-1"]
+    assert numbers == ["A-1", "A-2", "B-S"]
 
     a1 = next(f for f in floors if f["floor_number"] == "A-1")
     assert [u["unit_number"] for u in a1["units"]] == ["A-101", "A-102", "A-103"]
-    stores = next(f for f in floors if f["floor_number"] == "A-S")
-    assert [u["unit_number"] for u in stores["units"]] == ["A-S01"]
+    stores = next(f for f in floors if f["floor_number"] == "B-S")
+    assert [u["unit_number"] for u in stores["units"]] == ["B-S01"]
     assert stores["units"][0]["unit_type"] == "store"
 
 
@@ -306,13 +309,89 @@ def test_compound_refuses_when_floors_already_exist(app, client, auth_headers):
             )
 
 
-def test_a_building_without_stores_gets_no_store_floor(client, auth_headers):
+def test_a_count_mode_building_with_zero_units_gets_no_floor(client, auth_headers):
     prop = _make_property(client, auth_headers, "No Store P", layout={
-        "buildings": [{"code": "A", "floors": 1, "units_per_floor": 1, "store_count": 0}],
+        "buildings": [{"code": "A", "unit_type": "store", "unit_count": 0}],
     })
     floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
                         headers=auth_headers).get_json()["data"]
-    assert [f["floor_number"] for f in floors] == ["A-1"]
+    assert floors == []
+
+
+def test_count_mode_building_has_no_stray_floor_units(client, auth_headers):
+    """Regression test for the reported bug: picking a count-mode type
+    (store) used to still create a default 1-floor x 4-unit batch of
+    stray "room"-typed units alongside the dedicated store floor. A
+    count-mode building must create exactly its requested units — no
+    floors/rooms-per-floor fields even apply to it anymore."""
+    prop = _make_property(client, auth_headers, "Pure Store P", layout={
+        "buildings": [{"code": "A", "unit_type": "store", "unit_count": 4}],
+    })
+    generated = prop["layout_generated"]
+    assert generated["rooms"] == 0
+    assert generated["stores"] == 4
+    assert generated["units"] == 4
+
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert [f["floor_number"] for f in floors] == ["A-S"]
+    assert len(floors[0]["units"]) == 4
+    assert all(u["unit_type"] == "store" for u in floors[0]["units"])
+
+
+def test_mezzanine_adds_exactly_one_unit(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Mezz P", layout={
+        "buildings": [{"code": "A", "unit_type": "store", "unit_count": 2,
+                       "with_mezzanine": True}],
+    })
+    generated = prop["layout_generated"]
+    assert generated["units"] == 3          # 2 stores + 1 mezzanine
+
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert len(floors) == 1
+    numbers = sorted(u["unit_number"] for u in floors[0]["units"])
+    assert numbers == ["A-M", "A-S01", "A-S02"]
+
+
+def test_mezzanine_alone_still_creates_a_floor(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Mezz Only P", layout={
+        "buildings": [{"code": "A", "unit_type": "store", "unit_count": 0,
+                       "with_mezzanine": True}],
+    })
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    assert [f["floor_number"] for f in floors] == ["A-S"]
+    assert [u["unit_number"] for u in floors[0]["units"]] == ["A-M"]
+
+
+def test_room_with_store_creates_one_linked_room_per_store(client, auth_headers):
+    prop = _make_property(client, auth_headers, "Room Store P", layout={
+        "buildings": [{"code": "A", "unit_type": "store", "unit_count": 2,
+                       "room_with_store": True}],
+    })
+    generated = prop["layout_generated"]
+    assert generated["stores"] == 2
+    assert generated["rooms"] == 2
+    assert generated["units"] == 4
+
+    floors = client.get(f"/api/v1/properties/{prop['id']}/structure",
+                        headers=auth_headers).get_json()["data"]
+    units = floors[0]["units"]
+    assert sorted(u["unit_number"] for u in units) == ["A-S01", "A-S01-R", "A-S02", "A-S02-R"]
+    room_unit = next(u for u in units if u["unit_number"] == "A-S01-R")
+    assert room_unit["unit_type"] == "room"
+
+
+def test_compound_rejects_unknown_unit_type(client, auth_headers):
+    before = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
+    resp = client.post("/api/v1/properties", headers=auth_headers, json={
+        "name": "Bad Unit Type", "property_type": "compound",
+        "layout": {"buildings": [{"code": "A", "unit_type": "spaceship", "floors": 1, "units_per_floor": 1}]},
+    })
+    assert resp.status_code == 400
+    after = client.get("/api/v1/properties", headers=auth_headers).get_json()["meta"]["count"]
+    assert after == before
 
 
 # --------------------------------------------------------- renumbering

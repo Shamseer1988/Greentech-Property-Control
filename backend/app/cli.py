@@ -158,6 +158,40 @@ def _seed_property_types() -> None:
     db.session.flush()
 
 
+# code, name, is_facility, bulk_mode — the 14 values that used to be the
+# hardcoded UNIT_TYPES/FACILITY_TYPES sets in models/unit.py. "floors"
+# means the layout wizard walks floors x rooms-per-floor for this type;
+# "count" means it's a flat quantity on one dedicated floor (store,
+# shop...), no floor/rooms-per-floor breakdown.
+DEFAULT_UNIT_TYPES = [
+    ("room", "Room", False, "floors"),
+    ("flat_1bhk", "Flat — 1BHK", False, "floors"),
+    ("flat_2bhk", "Flat — 2BHK", False, "floors"),
+    ("floor", "Floor", False, "floors"),
+    ("villa", "Villa", False, "floors"),
+    ("kitchen", "Kitchen", True, "floors"),
+    ("bathroom", "Bathroom", True, "floors"),
+    ("play_area", "Play area", True, "floors"),
+    ("mess", "Mess", True, "floors"),
+    ("store", "Store", False, "count"),
+    ("shop", "Shop", False, "count"),
+    ("cafeteria", "Cafeteria", False, "count"),
+    ("supermarket", "Supermarket", False, "count"),
+    ("other", "Other", False, "count"),
+]
+
+
+def _seed_unit_types() -> None:
+    from .models import UnitType
+
+    by_code = {t.code: t for t in UnitType.query.all()}
+    for code, name, is_facility, bulk_mode in DEFAULT_UNIT_TYPES:
+        if code not in by_code:
+            db.session.add(UnitType(code=code, name=name, is_facility=is_facility,
+                                    bulk_mode=bulk_mode))
+    db.session.flush()
+
+
 def _seed_expense_categories() -> None:
     from .models import ExpenseCategory, LedgerMapping
 
@@ -606,6 +640,24 @@ def register_commands(app: Flask) -> None:
                 _models.GeneratedAgreement.__table__.create(bind=conn)
                 click.echo("  + generated_agreements")
 
+            # --- Unit Types master (replaces the hardcoded UNIT_TYPES /
+            # FACILITY_TYPES sets that used to live in models/unit.py).
+            # Seeded by `flask seed`.
+            if not insp.has_table("unit_types"):
+                from . import models as _models
+                _models.UnitType.__table__.create(bind=conn)
+                click.echo("  + unit_types")
+
+            if insp.has_table("units"):
+                col = next((c for c in insp.get_columns("units") if c["name"] == "unit_type"), None)
+                # SQLite reports no length on VARCHAR; only Postgres needs
+                # (and can do) an ALTER here.
+                if col is not None and bind.dialect.name == "postgresql":
+                    length = getattr(col.get("type"), "length", None)
+                    if length is not None and length < 32:
+                        conn.execute(text("ALTER TABLE units ALTER COLUMN unit_type TYPE VARCHAR(32)"))
+                        click.echo("  ~ units.unit_type widened to VARCHAR(32)")
+
         click.echo("Done.")
 
     @app.cli.group("landlord-dues")
@@ -765,6 +817,9 @@ def register_commands(app: Flask) -> None:
 
         click.echo("Seeding property types...")
         _seed_property_types()
+
+        click.echo("Seeding unit types...")
+        _seed_unit_types()
 
         click.echo("Seeding system settings...")
         from .services import settings as settings_service

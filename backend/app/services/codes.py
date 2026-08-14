@@ -7,6 +7,7 @@ _PREFIX_DEFAULTS = {
     "property": "PROP",
     "landlord": "LL",
     "client": "CL",
+    "expense_category": "EX",
 }
 
 

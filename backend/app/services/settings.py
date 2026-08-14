@@ -20,13 +20,14 @@ _CACHE_TTL = 30  # seconds — short enough that a stale read self-heals fast
 
 # Category ordering controls how tabs are sorted in the UI.
 CATEGORY_ORDER = [
-    "company", "property", "numbering", "approval", "alerts",
+    "company", "property", "expense", "numbering", "approval", "alerts",
     "email", "ui", "import", "security", "backup", "audit",
 ]
 
 CATEGORY_LABEL = {
     "company": "Company",
     "property": "Property",
+    "expense": "Expense categories",
     "numbering": "Numbering",
     "approval": "Approval workflow",
     "alerts": "Alerts & reminders",
@@ -109,6 +110,12 @@ DEFAULTS: list[dict] = [
     {"key": "contract.default_cheque_count", "category": "property", "type": "int",
      "label": "Cheques per annual contract", "value": 12,
      "description": "How many rent cheques the PDC grid pre-fills for a one-year agreement."},
+
+    # ---------- Expense categories ----------
+    {"key": "numbering.expense_category.prefix", "category": "expense", "type": "string",
+     "label": "Expense category code prefix", "value": "EX",
+     "help": "Used for auto-generated expense category codes such as EX-0001. "
+             "Existing categories keep their current code either way."},
 
     # ---------- Approval workflow ----------
     # Each toggle gates one action. When it is on the action is queued

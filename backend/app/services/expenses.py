@@ -327,7 +327,8 @@ def void_expense(expense: Expense, *, reason: str, actor) -> Expense:
 
 def update_category(category: ExpenseCategory, *, name: str | None = None,
                     kind: str | None = None, is_property_wise: bool | None = None,
-                    is_active: bool | None = None, actor) -> ExpenseCategory:
+                    is_active: bool | None = None, remarks: str | None = None,
+                    actor) -> ExpenseCategory:
     from ..models.expense import CATEGORY_KINDS
     if kind is not None and kind not in CATEGORY_KINDS:
         raise ExpenseError(f"kind must be one of {sorted(CATEGORY_KINDS)}")
@@ -343,6 +344,8 @@ def update_category(category: ExpenseCategory, *, name: str | None = None,
         category.is_property_wise = is_property_wise
     if is_active is not None:
         category.is_active = is_active
+    if remarks is not None:
+        category.remarks = remarks
     category.updated_by = actor.id
     db.session.flush()
     audit.record(user=actor, action="update", module="expense_category",

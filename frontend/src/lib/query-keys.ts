@@ -60,6 +60,16 @@ export const keys = {
     landlordPayments: (filters: Record<string, unknown> = {}) =>
       ["expenses", "landlord-payments", filters] as const,
   },
+  expenseCategories: {
+    all: () => ["expense-categories"] as const,
+    list: (filters: Record<string, unknown> = {}) =>
+      ["expense-categories", "list", filters] as const,
+  },
+  unitTypes: {
+    all: () => ["unit-types"] as const,
+    list: (filters: Record<string, unknown> = {}) =>
+      ["unit-types", "list", filters] as const,
+  },
   audit: {
     all: () => ["audit"] as const,
     list: (filters: Record<string, unknown> = {}) =>

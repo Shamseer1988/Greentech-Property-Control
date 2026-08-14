@@ -5,7 +5,7 @@ from app import create_app
 from app.extensions import db
 from app.cli import (
     _seed_permissions, _seed_roles, _seed_super_user, _seed_expense_categories,
-    _seed_property_types,
+    _seed_property_types, _seed_unit_types,
 )
 from app.services import notification_rules, settings as settings_service
 
@@ -38,6 +38,7 @@ def app(tmp_path):
         # the messaging screens expect to find.
         _seed_expense_categories()
         _seed_property_types()
+        _seed_unit_types()
         settings_service.seed_defaults()
         notification_rules.seed_defaults()
         db.session.commit()

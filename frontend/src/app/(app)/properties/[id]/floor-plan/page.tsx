@@ -7,6 +7,7 @@ import { ArrowLeft, Printer, Layers, DoorClosed, ChevronDown, ChevronsDownUp, Ch
 import { api } from "@/lib/api";
 import { useRouteParams } from "@/lib/use-route-params";
 import { useEvents } from "@/lib/use-events";
+import { useUnitTypes } from "@/lib/use-unit-types";
 import { Skeleton, ErrorState, EmptyState } from "@/components/ui/states";
 
 type Occupant = {
@@ -46,15 +47,13 @@ const TONES: Record<string, { label: string; dot: string; tile: string }> = {
   blocked:     { label: "Blocked",     dot: "bg-rose-500",    tile: "border-rose-500/40 bg-rose-500/5 hover:bg-rose-500/10" },
 };
 
-const FACILITY_TYPES = new Set(["kitchen", "bathroom", "play_area", "mess"]);
-
 function money(n: number | null): string {
   return n == null ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
-function UnitTile({ unit }: { unit: Unit }) {
+function UnitTile({ unit, facilityCodes }: { unit: Unit; facilityCodes: Set<string> }) {
   const tone = TONES[unit.occupancy_status] ?? TONES.empty;
-  const facility = FACILITY_TYPES.has(unit.unit_type);
+  const facility = facilityCodes.has(unit.unit_type);
   return (
     <div
       className={
@@ -135,6 +134,9 @@ function StatCard({
 export default function FloorPlanPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = useRouteParams(params);
   const qc = useQueryClient();
+  const { types: unitTypes } = useUnitTypes();
+  const facilityCodes = useMemo(
+    () => new Set(unitTypes.filter((t) => t.is_facility).map((t) => t.code)), [unitTypes]);
 
   useEvents("occupancy", () => {
     qc.invalidateQueries({ queryKey: ["properties", "structure", id] });
@@ -366,7 +368,7 @@ export default function FloorPlanPage({ params }: { params: Promise<{ id: string
               ) : (
                 <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 xl:grid-cols-9 gap-2 print:grid-cols-6">
                   {f.units.map((r) => (
-                    <UnitTile key={r.id} unit={r} />
+                    <UnitTile key={r.id} unit={r} facilityCodes={facilityCodes} />
                   ))}
                 </div>
               )}

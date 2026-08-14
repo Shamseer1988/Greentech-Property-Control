@@ -6,7 +6,7 @@
 #   1. Backend (waitress on 127.0.0.1:5000)
 #   2. Celery worker      (skipped when REDIS_URL is unset)
 #   3. Celery beat        (skipped when REDIS_URL is unset)
-#   4. Frontend (Next.js on 127.0.0.1:3000)
+#   4. Frontend (Next.js on 127.0.0.1:3001)
 #
 # Postgres is assumed to be running as a Windows service already (see
 # docs/DEPLOYMENT.md). If it isn't, the backend hangs on
@@ -71,4 +71,4 @@ Start-InNewWindow "greentech-frontend" $frontend `
 Write-Host ""
 Write-Host "Windows opened. Tail their output to confirm everything is up."
 Write-Host "Backend health:   curl http://127.0.0.1:5000/api/v1/health"
-Write-Host "Frontend:         http://127.0.0.1:3000"
+Write-Host "Frontend:         http://127.0.0.1:3001"

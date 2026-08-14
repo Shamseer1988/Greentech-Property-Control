@@ -71,10 +71,12 @@ def stream():
     resp = Response(gen(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"  # disable nginx buffering
-    # Force the connection to close at the end of the stream — proxies
-    # (Next.js undici, nginx) won't try to reuse this socket for a
-    # follow-up request, which is what caused the ECONNRESET bursts.
-    resp.headers["Connection"] = "close"
+    # No explicit Connection header here: it's hop-by-hop (PEP 3333) and
+    # waitress asserts against a WSGI app setting it, crashing the
+    # worker outright. The generator's own STREAM_MAX_SECONDS cap above
+    # already ends the response body on a clean schedule; waitress
+    # closes the socket once the chunked body finishes, which is enough
+    # for the Next.js/nginx proxy to stop trying to reuse it.
     return resp
 
 

@@ -10,8 +10,7 @@ The generator reuses the same patterns as the per-entity create routes:
 """
 
 from ..extensions import db
-from ..models import Property, Floor, Unit
-from ..models.unit import UNIT_TYPES
+from ..models import Property, Floor, Unit, UnitType
 from . import audit
 
 
@@ -23,6 +22,15 @@ MAX_STORES_PER_BUILDING = 50
 
 class LayoutError(ValueError):
     """Raised for any caller-visible validation failure inside the generator."""
+
+
+def _unit_type_or_raise(code: str, *, where: str) -> UnitType:
+    """A unit type is only offerable while active — same non-destructive
+    precedent as PropertyType/`_valid_property_type()`."""
+    utype = UnitType.query.filter_by(code=code, is_active=True).first()
+    if utype is None:
+        raise LayoutError(f"{where}: unknown or inactive unit_type {code!r}")
+    return utype
 
 
 def _floor_specs(floors: int, floor_prefix: str, ground_floor: bool) -> list[tuple[str, str]]:
@@ -68,8 +76,7 @@ def generate_structure(
         raise LayoutError(f"floors must be between 1 and {MAX_FLOORS}")
     if not (1 <= units_per_floor <= MAX_UNITS_PER_FLOOR):
         raise LayoutError(f"units_per_floor must be between 1 and {MAX_UNITS_PER_FLOOR}")
-    if default_unit_type not in UNIT_TYPES:
-        raise LayoutError(f"default_unit_type must be one of {sorted(UNIT_TYPES)}")
+    _unit_type_or_raise(default_unit_type, where="Structure")
 
     existing = (
         db.session.query(db.func.count(Floor.id))
@@ -168,15 +175,25 @@ def generate_compound_structure(
     """Create several buildings' worth of floors and units under one
     property in a single transaction.
 
-    Each entry in `buildings` is:
-        {"code": "A", "floors": 4, "units_per_floor": 6,
-         "store_count": 2, "ground_floor": True,
-         "default_unit_type": "room"}
+    Each entry in `buildings` is one of two shapes, chosen by the
+    building's `unit_type` and that type's `bulk_mode` (see `UnitType`):
+
+    floors mode — {"code": "A", "unit_type": "room", "floors": 4,
+                   "units_per_floor": 6, "ground_floor": True}
+        Walks floors x rooms-per-floor, same as `generate_structure`.
+
+    count mode — {"code": "S1", "unit_type": "store", "unit_count": 4,
+                  "with_mezzanine": False, "room_with_store": False}
+        No floor/rooms-per-floor breakdown — just `unit_count` units on
+        one dedicated floor (labelled "<code>-S"), optionally with one
+        extra mezzanine unit for the building and/or one linked `room`
+        unit per count-unit. A building never mixes the two shapes: the
+        selected unit type alone decides which fields apply, so a
+        store-type building has no floors field to leave stray, and a
+        room-type building has no separate store count bolted on.
 
     `code` is optional — buildings are lettered A, B, C… when left
-    blank. Stores get their own floor per building (labelled "<code>-S")
-    so a store never competes with a room for a unit number, matching
-    how the workbook itself always kept a separate Store column.
+    blank.
 
     Same transaction contract as `generate_structure`: the caller
     commits. Refuses if the property already has any floor, for the
@@ -200,27 +217,8 @@ def generate_compound_structure(
     per_building: list[dict] = []
 
     for index, spec in enumerate(buildings):
-        floors = int(spec.get("floors", 0) or 0)
-        units_per_floor = int(spec.get("units_per_floor", 0) or 0)
-        store_count = int(spec.get("store_count", 0) or 0)
-        ground_floor = bool(spec.get("ground_floor", False))
-        default_unit_type = str(spec.get("default_unit_type") or "room")
-
-        if not (1 <= floors <= MAX_FLOORS):
-            raise LayoutError(
-                f"Building {index + 1}: floors must be between 1 and {MAX_FLOORS}")
-        if not (1 <= units_per_floor <= MAX_UNITS_PER_FLOOR):
-            raise LayoutError(
-                f"Building {index + 1}: units per floor must be between "
-                f"1 and {MAX_UNITS_PER_FLOOR}")
-        if not (0 <= store_count <= MAX_STORES_PER_BUILDING):
-            raise LayoutError(
-                f"Building {index + 1}: stores must be between "
-                f"0 and {MAX_STORES_PER_BUILDING}")
-        if default_unit_type not in UNIT_TYPES:
-            raise LayoutError(
-                f"Building {index + 1}: default_unit_type must be one of "
-                f"{sorted(UNIT_TYPES)}")
+        unit_type = str(spec.get("unit_type") or spec.get("default_unit_type") or "room")
+        utype = _unit_type_or_raise(unit_type, where=f"Building {index + 1}")
 
         code = _building_code(index, str(spec.get("code") or ""))
         if code in used_codes:
@@ -228,70 +226,127 @@ def generate_compound_structure(
         used_codes.add(code)
 
         rooms_built = 0
-        floor_specs = _floor_specs(floors, "", ground_floor)
-        for stored_floor_no, floor_seq in floor_specs:
-            floor = Floor(
-                property_id=property.id,
-                floor_number=f"{code}-{stored_floor_no}",
-                floor_name=str(spec.get("label") or f"Building {code}"),
-                created_by=actor.id, updated_by=actor.id,
-            )
-            db.session.add(floor)
-            db.session.flush()
-            counts["floors"] += 1
-            audit.record(user=actor, action="create", module="floor",
-                         entity_type="floor", entity_id=floor.id,
-                         new_value=floor.to_dict())
+        stores_built = 0
 
-            unit_pad = max(2, len(str(units_per_floor)))
-            for uidx in range(1, units_per_floor + 1):
-                unit = Unit(
-                    property_id=property.id, floor_id=floor.id,
-                    unit_number=f"{code}-{floor_seq}{uidx:0{unit_pad}d}",
-                    unit_type=default_unit_type,
+        if utype.bulk_mode == "floors":
+            floors = int(spec.get("floors", 0) or 0)
+            units_per_floor = int(spec.get("units_per_floor", 0) or 0)
+            ground_floor = bool(spec.get("ground_floor", False))
+
+            if not (1 <= floors <= MAX_FLOORS):
+                raise LayoutError(
+                    f"Building {index + 1}: floors must be between 1 and {MAX_FLOORS}")
+            if not (1 <= units_per_floor <= MAX_UNITS_PER_FLOOR):
+                raise LayoutError(
+                    f"Building {index + 1}: units per floor must be between "
+                    f"1 and {MAX_UNITS_PER_FLOOR}")
+
+            floor_specs = _floor_specs(floors, "", ground_floor)
+            for stored_floor_no, floor_seq in floor_specs:
+                floor = Floor(
+                    property_id=property.id,
+                    floor_number=f"{code}-{stored_floor_no}",
+                    floor_name=str(spec.get("label") or f"Building {code}"),
                     created_by=actor.id, updated_by=actor.id,
                 )
-                db.session.add(unit)
+                db.session.add(floor)
                 db.session.flush()
-                counts["units"] += 1
-                rooms_built += 1
-                audit.record(user=actor, action="create", module="unit",
-                             entity_type="unit", entity_id=unit.id,
-                             new_value=unit.to_dict())
+                counts["floors"] += 1
+                audit.record(user=actor, action="create", module="floor",
+                             entity_type="floor", entity_id=floor.id,
+                             new_value=floor.to_dict())
 
-        if store_count:
-            store_floor = Floor(
-                property_id=property.id, floor_number=f"{code}-S",
-                floor_name=f"Building {code} — Stores",
-                created_by=actor.id, updated_by=actor.id,
-            )
-            db.session.add(store_floor)
-            db.session.flush()
-            counts["floors"] += 1
-            audit.record(user=actor, action="create", module="floor",
-                         entity_type="floor", entity_id=store_floor.id,
-                         new_value=store_floor.to_dict())
+                unit_pad = max(2, len(str(units_per_floor)))
+                for uidx in range(1, units_per_floor + 1):
+                    unit = Unit(
+                        property_id=property.id, floor_id=floor.id,
+                        unit_number=f"{code}-{floor_seq}{uidx:0{unit_pad}d}",
+                        unit_type=unit_type,
+                        created_by=actor.id, updated_by=actor.id,
+                    )
+                    db.session.add(unit)
+                    db.session.flush()
+                    counts["units"] += 1
+                    rooms_built += 1
+                    audit.record(user=actor, action="create", module="unit",
+                                 entity_type="unit", entity_id=unit.id,
+                                 new_value=unit.to_dict())
 
-            store_pad = max(2, len(str(store_count)))
-            for sidx in range(1, store_count + 1):
-                store = Unit(
-                    property_id=property.id, floor_id=store_floor.id,
-                    unit_number=f"{code}-S{sidx:0{store_pad}d}",
-                    unit_type="store", occupancy_status="empty",
+        else:  # bulk_mode == "count"
+            unit_count = int(spec.get("unit_count", spec.get("store_count", 0)) or 0)
+            with_mezzanine = bool(spec.get("with_mezzanine", False))
+            room_with_store = bool(spec.get("room_with_store", False))
+
+            if not (0 <= unit_count <= MAX_STORES_PER_BUILDING):
+                raise LayoutError(
+                    f"Building {index + 1}: unit count must be between "
+                    f"0 and {MAX_STORES_PER_BUILDING}")
+
+            if unit_count or with_mezzanine:
+                count_floor = Floor(
+                    property_id=property.id, floor_number=f"{code}-S",
+                    floor_name=str(spec.get("label") or f"Building {code} — {utype.name}"),
                     created_by=actor.id, updated_by=actor.id,
                 )
-                db.session.add(store)
+                db.session.add(count_floor)
                 db.session.flush()
-                counts["units"] += 1
-                counts["stores"] += 1
-                audit.record(user=actor, action="create", module="unit",
-                             entity_type="unit", entity_id=store.id,
-                             new_value=store.to_dict())
+                counts["floors"] += 1
+                audit.record(user=actor, action="create", module="floor",
+                             entity_type="floor", entity_id=count_floor.id,
+                             new_value=count_floor.to_dict())
+
+                pad = max(2, len(str(unit_count)))
+                for uidx in range(1, unit_count + 1):
+                    unit_number = f"{code}-S{uidx:0{pad}d}"
+                    store = Unit(
+                        property_id=property.id, floor_id=count_floor.id,
+                        unit_number=unit_number,
+                        unit_type=unit_type, occupancy_status="empty",
+                        created_by=actor.id, updated_by=actor.id,
+                    )
+                    db.session.add(store)
+                    db.session.flush()
+                    counts["units"] += 1
+                    stores_built += 1
+                    audit.record(user=actor, action="create", module="unit",
+                                 entity_type="unit", entity_id=store.id,
+                                 new_value=store.to_dict())
+
+                    if room_with_store:
+                        room_unit = Unit(
+                            property_id=property.id, floor_id=count_floor.id,
+                            unit_number=f"{unit_number}-R",
+                            unit_type="room", unit_name=f"Room for {unit_number}",
+                            occupancy_status="empty",
+                            created_by=actor.id, updated_by=actor.id,
+                        )
+                        db.session.add(room_unit)
+                        db.session.flush()
+                        counts["units"] += 1
+                        rooms_built += 1
+                        audit.record(user=actor, action="create", module="unit",
+                                     entity_type="unit", entity_id=room_unit.id,
+                                     new_value=room_unit.to_dict())
+
+                if with_mezzanine:
+                    mezzanine = Unit(
+                        property_id=property.id, floor_id=count_floor.id,
+                        unit_number=f"{code}-M", unit_type=unit_type,
+                        unit_name="Mezzanine", occupancy_status="empty",
+                        created_by=actor.id, updated_by=actor.id,
+                    )
+                    db.session.add(mezzanine)
+                    db.session.flush()
+                    counts["units"] += 1
+                    audit.record(user=actor, action="create", module="unit",
+                                 entity_type="unit", entity_id=mezzanine.id,
+                                 new_value=mezzanine.to_dict())
 
         counts["buildings"] += 1
         counts["rooms"] += rooms_built
-        per_building.append({"code": code, "floors": floors, "rooms": rooms_built,
-                             "stores": store_count})
+        counts["stores"] += stores_built
+        per_building.append({"code": code, "unit_type": unit_type,
+                             "rooms": rooms_built, "stores": stores_built})
 
     audit.record(
         user=actor, action="bulk_create", module="property",
