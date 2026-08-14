@@ -66,9 +66,9 @@ if ($redisUrl) {
 
 Write-Host "Starting Next.js frontend..." -ForegroundColor Cyan
 Start-InNewWindow "greentech-frontend" $frontend `
-    "npm start -- -p 3001"
+    "npm start -- -H 0.0.0.0 -p 3001"
 
 Write-Host ""
 Write-Host "Windows opened. Tail their output to confirm everything is up."
 Write-Host "Backend health:   curl http://127.0.0.1:5000/api/v1/health"
-Write-Host "Frontend:         http://127.0.0.1:3001"
+Write-Host "Frontend:         http://0.0.0.0:3001 (accessible via your IP 192.168.150.35:3001)"
