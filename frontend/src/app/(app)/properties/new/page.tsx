@@ -109,6 +109,9 @@ export default function NewPropertyPage() {
   const unitTypeByCode = useMemo(
     () => Object.fromEntries(unitTypes.map((t) => [t.code, t])), [unitTypes]);
   const bulkModeFor = (code: string) => unitTypeByCode[code]?.bulk_mode ?? "floors";
+  const unitsForBuilding = (b: BuildingSpec) => bulkModeFor(b.unit_type) === "floors"
+    ? b.floors * b.units_per_floor
+    : b.unit_count + (b.room_with_store ? b.unit_count : 0) + (b.with_mezzanine ? 1 : 0);
 
   const [form, setForm] = useState<Record<string, unknown>>({ property_type: "full_building", ownership_type: "rented" });
   const [landlords, setLandlords] = useState<LandlordOption[]>([]);
@@ -518,9 +521,7 @@ export default function NewPropertyPage() {
                         {safeBuildings.map((b) => (
                           <div key={b.key} className="flex justify-between text-muted-foreground">
                             <span className="truncate pr-2">{b.resolvedCode} · {unitTypeByCode[b.unit_type]?.name ?? b.unit_type}</span>
-                            <span className="shrink-0">
-                              {bulkModeFor(b.unit_type) === "floors" ? b.floors * b.units_per_floor : b.unit_count}
-                            </span>
+                            <span className="shrink-0">{unitsForBuilding(b)}</span>
                           </div>
                         ))}
                       </div>
