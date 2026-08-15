@@ -210,6 +210,9 @@ def register_security_headers(app: Flask) -> None:
             "Permissions-Policy",
             "camera=(), microphone=(), geolocation=(), interest-cohort=()",
         )
+        # Prevent aggressive caching of API responses by browsers and CDNs (e.g., Cloudflare)
+        resp.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        resp.headers.setdefault("Pragma", "no-cache")
         return resp
 
 
