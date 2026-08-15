@@ -25,6 +25,7 @@ from .jwt_blocklist import JWTBlocklist
 from .job_run import JobRun
 from .notification import Notification
 from .notification_rule import NotificationRule, OutboundMessage
+from .accounts import Account, JournalEntry, JournalLine, BankAccount, Supplier
 
 __all__ = [
     "BaseModel",
@@ -74,4 +75,9 @@ __all__ = [
     "Notification",
     "NotificationRule",
     "OutboundMessage",
+    "Account",
+    "JournalEntry",
+    "JournalLine",
+    "BankAccount",
+    "Supplier",
 ]

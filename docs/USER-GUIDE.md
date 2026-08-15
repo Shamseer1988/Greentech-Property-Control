@@ -21,18 +21,20 @@ are "void + repost" instead of "edit"), see [ACCOUNTING-RULES.md](ACCOUNTING-RUL
 6. [Clients](#6-clients)
 7. [Properties](#7-properties)
 8. [Contracts](#8-contracts)
-9. [Collections](#9-collections)
-10. [Expenses](#10-expenses)
-11. [Profit & Loss](#11-profit--loss)
-12. [Approvals](#12-approvals)
-13. [Reports](#13-reports)
-14. [Alerts](#14-alerts)
-15. [Messages](#15-messages)
-16. [Audit Log](#16-audit-log)
-17. [Migration (one-time workbook import)](#17-migration-one-time-workbook-import)
-18. [Common patterns across every screen](#18-common-patterns-across-every-screen)
-19. [Walkthrough: a new property from zero to first receipt](#19-walkthrough-a-new-property-from-zero-to-first-receipt)
-20. [Troubleshooting](#20-troubleshooting)
+9. [Renewals](#9-renewals)
+10. [Maintenance](#10-maintenance)
+11. [Collections](#11-collections)
+12. [Expenses](#12-expenses)
+13. [Profit & Loss](#13-profit--loss)
+14. [Approvals](#14-approvals)
+15. [Reports](#15-reports)
+16. [Alerts](#16-alerts)
+17. [Messages](#17-messages)
+18. [Audit Log](#18-audit-log)
+19. [Migration (one-time workbook import)](#19-migration-one-time-workbook-import)
+20. [Common patterns across every screen](#20-common-patterns-across-every-screen)
+21. [Walkthrough: a new property from zero to first receipt](#21-walkthrough-a-new-property-from-zero-to-first-receipt)
+22. [Troubleshooting](#22-troubleshooting)
 
 ---
 
@@ -66,11 +68,13 @@ first time:
 5. **Properties** — buildings/camps/villas, linked to a landlord, with their
    floors and units generated.
 6. **Contracts** — tie a client to specific units in a property.
-7. From here on it's day-to-day operation: **Collections**, **Expenses**,
-   **Profit & Loss**, **Reports**.
+7. From here on it's day-to-day operation: **Collections** (§11), **Expenses**
+   (§12), **Profit & Loss** (§13), **Reports** (§15). When a landlord
+   agreement is expiring, use **Renewals** (§9) to record the new terms.
+   Log any work orders with **Maintenance** (§10).
 
 If you're moving from an existing spreadsheet, see
-[§17 Migration](#17-migration-one-time-workbook-import) instead of entering
+[§19 Migration](#19-migration-one-time-workbook-import) instead of entering
 everything by hand.
 
 ---
@@ -84,11 +88,11 @@ everything by hand.
 | **Company** | Company name, logo (shown in the sidebar and on printed reports/emails). |
 | **Property** | Defaults used when creating properties (unit numbering style, etc.). |
 | **Numbering** | The prefix/format for auto-generated codes — property codes, contract numbers, receipt/voucher numbers. |
-| **Approval** | Which actions require a second person's sign-off before they take effect (contract cancellation, rent reduction, receipt void) — see [§12 Approvals](#12-approvals). |
+| **Approval** | Which actions require a second person's sign-off before they take effect (contract cancellation, rent reduction, receipt void, renewal) — see [§14 Approvals](#14-approvals). |
 | **Alerts** | How many days before expiry a document/agreement counts as "expiring soon" for the Alerts screen and dashboard. |
 | **Email** | SMTP server details so the portal can send emails (statements, reminders). Use **Test connection** before saving. |
 | **UI** | Glassmorphism on/off, compact density, table row density — cosmetic, per-install not per-user. |
-| **Import** | Defaults for the P&L import wizard (ledger-to-category mapping is remembered automatically after the first import, see [§10](#10-expenses)). |
+| **Import** | Defaults for the P&L import wizard (ledger-to-category mapping is remembered automatically after the first import, see [§12](#12-expenses)). |
 | **Security** | Password policy, session behaviour. |
 | **Backup** | Trigger a backup on demand, download a previous backup, or restore from one. A backup bundles the database *and* every uploaded document into a single `.zip`. **Restore is destructive** — it replaces everything currently in the database with what's in the backup file, so use it deliberately. |
 | **Audit** | Retention settings for the audit log. |
@@ -144,7 +148,7 @@ default — tick **Show deactivated** to include them.
 - **Properties** — every property currently linked to this landlord, each
   a click-through to its own page.
 - **Documents** — CR/QID copies, agreements, anything else on file. See
-  [§18](#18-common-patterns-across-every-screen) for how uploads work,
+  [§20](#20-common-patterns-across-every-screen) for how uploads work,
   including tagging a document to a property at the same time.
 
 ### Editing / deactivating
@@ -247,6 +251,9 @@ just the current one:
   is silently overwritten, so you can always see what the rent used to be
   and when it changed.
 
+For a structured log of all renewals across all properties, see
+[§9 Renewals](#9-renewals).
+
 ### Floors & Units
 Add floors/units individually from their tabs, or bulk-generate more of the
 same pattern used at creation time. Each unit tracks its own type, rent,
@@ -297,11 +304,92 @@ expiry window (Expired / within 1, 3, or 6 months).
 ### Cancelling or reducing rent
 Cancelling a contract or reducing its rent goes through the **Approvals**
 queue if your install requires sign-off for those actions (§3 Settings →
-Approval, §12). Until approved, the contract keeps working as before.
+Approval, §14). Until approved, the contract keeps working as before.
 
 ---
 
-## 9. Collections
+## 9. Renewals
+
+*Sidebar → Operations → Renewals.*
+
+When a landlord agreement is expiring and you've renegotiated the terms,
+record the renewal here rather than creating a brand-new agreement manually
+on the property page. This screen gives you a single place to view all
+renewals across all properties.
+
+### Post a renewal
+1. **New Renewal** (top right, requires the `renewal.create` permission).
+2. Pick the **property** and the **landlord**.
+3. Enter the **new start date** and **new expiry date** for the renewed term.
+4. Optionally enter the **new monthly rent**, the new **agreement/contract
+   number**, **payment terms**, and any **remarks**.
+5. **Post Renewal.**
+
+Behind the scenes, posting a renewal:
+- Archives the currently-active agreement on that property (marked
+  "Archived" — the full history stays visible on the property's Agreement
+  tab).
+- Creates a new active agreement with the dates and rent you entered.
+
+> If your install has "Renewal approval required" turned on (Settings →
+> Approval), the old agreement is **not** touched until an approver
+> confirms. The renewal sits in the Approvals queue with status **Pending
+> Approval** and is visible here with an amber badge until approved.
+
+### Filter the list
+Use the **Property** and **Landlord** dropdowns to narrow the list to one
+portfolio or one landlord.
+
+### Viewing the renewal's effect
+After a renewal is completed, go to the property's **Agreement** tab — the
+archived old agreement and the new active agreement are both visible there
+with their full dates and rent history.
+
+---
+
+## 10. Maintenance
+
+*Sidebar → Operations → Maintenance.*
+
+A log of maintenance work ordered for a property or one of its units. Use it
+to track what's in progress, when it started, when it's expected to finish,
+and when it actually finished.
+
+### Start a maintenance record
+1. **Start Maintenance** (top right, requires `maintenance.manage`
+   permission).
+2. Choose **Property** or **Unit** as the entity type.
+   - For a unit, first pick the property, then pick the specific unit from
+     the list that appears.
+3. Enter the **reason**, a **start date**, an optional **expected end date**,
+   and any remarks.
+4. **Save.**
+
+A reference number is generated automatically (e.g. `MAINT-202608-0001`).
+
+### Actions on an in-progress record
+Two icons appear on every **In progress** row:
+- **Complete** (tick icon) — marks the record as completed. Enter the actual
+  end date and any remarks about the resolution.
+- **Cancel** (X icon) — marks the record as cancelled with a confirmation
+  step.
+
+Once completed or cancelled, no further actions are available on that record.
+
+### Filters
+Filter by **status** (In progress / Completed / Cancelled), **entity type**
+(Property / Unit), and **property**.
+
+### Relationship to the Alerts screen
+The Alerts screen (§16) also surfaces units that are currently in
+maintenance status — those are driven by the unit's own status flag, which
+is set separately from this log. Use the Maintenance log for the
+*work-order record*; the unit status change is done from the unit's own row
+on the property's Units tab.
+
+---
+
+## 11. Collections
 
 *Sidebar → Collections.* What clients owe, and the money coming in.
 
@@ -338,11 +426,11 @@ they are (current / 30 / 60 / 90+ days), per client and totalled. Exportable.
 ### Statement of account
 Click through to any client from the main list to see their full statement:
 every charge and every receipt, running balance, in date order — handy to
-send a tenant directly (see [§15 Messages](#15-messages)).
+send a tenant directly (see [§17 Messages](#17-messages)).
 
 ---
 
-## 10. Expenses
+## 12. Expenses
 
 *Sidebar → Expenses.* Running costs and what you pay landlords. Three tabs:
 
@@ -390,7 +478,7 @@ direct/property costs are usually entered per-property as above):
 
 ---
 
-## 11. Profit & Loss
+## 13. Profit & Loss
 
 *Sidebar → Profit & Loss.*
 
@@ -401,17 +489,17 @@ direct/property costs are usually entered per-property as above):
 - **Company P&L** — the whole company for the month: rental income, direct
   costs, indirect/overhead costs by category, net profit.
 
-Both are also available under **Reports** (§13) with the full export/print
+Both are also available under **Reports** (§15) with the full export/print
 toolkit.
 
 ---
 
-## 12. Approvals
+## 14. Approvals
 
 *Sidebar → Approvals.* A queue of actions that are staged but not yet in
 effect, for actions your install has marked as needing a second person's
 sign-off (Settings → Approval decides which ones — typically contract
-cancellation, rent reduction, and receipt voids).
+cancellation, rent reduction, receipt voids, and landlord renewals).
 
 - Each row shows what's being requested, by whom, and why.
 - **Approve** applies the change immediately. **Reject** discards the
@@ -424,7 +512,7 @@ configured to need sign-off.
 
 ---
 
-## 13. Reports
+## 15. Reports
 
 *Sidebar → Reports.* Every report is filterable, sortable, paginated,
 printable, and exports to Excel or PDF. Grouped by category:
@@ -449,10 +537,10 @@ printable, and exports to Excel or PDF. Grouped by category:
 - *Ageing Report* — the same ageing buckets as Collections, as a
   standalone exportable report.
 - *PDC Register* — every post-dated cheque and its current status.
-- *Property Profit & Loss* / *Company Profit & Loss* — see §11.
+- *Property Profit & Loss* / *Company Profit & Loss* — see §13.
 
 **Control**
-- *Audit Report* — a filterable export of the audit log (§16).
+- *Audit Report* — a filterable export of the audit log (§18).
 
 ### Using any report
 1. Open it from the Reports list.
@@ -466,17 +554,18 @@ printable, and exports to Excel or PDF. Grouped by category:
 
 ---
 
-## 14. Alerts
+## 16. Alerts
 
 *Sidebar → Alerts.* A live feed of what needs attention soon: agreements
 and documents approaching expiry, and anything under active maintenance.
 How far in advance something counts as "soon" is set in Settings → Alerts.
 This is a read-only heads-up screen — act on what it shows from the
-relevant screen (Properties, Landlords, etc.).
+relevant screen (Properties, Landlords, etc.). For the full work-order log
+of maintenance jobs, see [§10 Maintenance](#10-maintenance).
 
 ---
 
-## 15. Messages
+## 17. Messages
 
 *Sidebar → Messages.* Every reminder and email the portal has sent (or
 would have sent, if a rule fired but a channel wasn't configured) — a full
@@ -488,7 +577,7 @@ landlord, attach their statement of account automatically, and send.
 
 ---
 
-## 16. Audit Log
+## 18. Audit Log
 
 *Sidebar → Audit Log.* Every create, edit, void, approval, and status
 change across the whole portal — who did it, when, and (for edits) the
@@ -498,7 +587,7 @@ nothing in the app bypasses it.
 
 ---
 
-## 17. Migration (one-time workbook import)
+## 19. Migration (one-time workbook import)
 
 *Sidebar → Migration.* For bringing your existing tracking spreadsheet in
 wholesale instead of typing everything by hand — a one-time, guided
@@ -523,7 +612,7 @@ day-to-day data entry after that goes through the normal screens above.
 
 ---
 
-## 18. Common patterns across every screen
+## 20. Common patterns across every screen
 
 A few conventions repeat everywhere in the portal, so once you know them
 you know most of the app:
@@ -561,7 +650,7 @@ you know most of the app:
 
 ---
 
-## 19. Walkthrough: a new property from zero to first receipt
+## 21. Walkthrough: a new property from zero to first receipt
 
 Putting the whole flow together, start to finish:
 
@@ -583,16 +672,19 @@ Putting the whole flow together, start to finish:
 8. Check **Rent & costs** on the property page, or **Reports → Property
    Profit & Loss**, to see the month's numbers for this property alongside
    everything else.
+9. If any maintenance work is scheduled on a unit or property, log it under
+   **Operations → Maintenance** (§10) so the team can track start, expected
+   completion, and actual finish.
 
 ---
 
-## 20. Troubleshooting
+## 22. Troubleshooting
 
 - **A button/page I expect isn't there.** Your role likely doesn't have
   that permission — ask an admin to grant it under Users & Roles → Roles &
   Permissions.
 - **I made a mistake on a receipt/payment/expense.** Void it (with a
-  reason) and post a correct one — see §18. There is no edit for posted
+  reason) and post a correct one — see §20. There is no edit for posted
   financial records, by design.
 - **I need to fix an agreement's rent or dates.** Use **Amend agreement**
   on the property's Agreement tab (§7), not a raw edit — it keeps the old
@@ -601,8 +693,13 @@ Putting the whole flow together, start to finish:
   deactivated. Reactivate it from its list page (tick **Show deactivated**
   to find it, then flip its status back).
 - **Something looks wrong across the whole month.** Check **Audit Log**
-  (§16) filtered to that date range — every change that could explain it is
+  (§18) filtered to that date range — every change that could explain it is
   there with a before/after.
 - **I need to undo something bigger than one record.** Settings → Backup
   lets you restore a previous backup — this replaces the *entire* database,
   so use it only as a last resort and only if you're sure.
+- **A renewal I posted is showing as "Pending Approval".** A second
+  approver needs to confirm it — see **Approvals** (§14). The old agreement
+  remains active until the approval goes through.
+- **I started a maintenance record by mistake.** Open **Operations →
+  Maintenance** (§10), find the record, and use the Cancel action.

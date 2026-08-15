@@ -21,7 +21,7 @@ _CACHE_TTL = 30  # seconds — short enough that a stale read self-heals fast
 # Category ordering controls how tabs are sorted in the UI.
 CATEGORY_ORDER = [
     "company", "property", "expense", "numbering", "approval", "alerts",
-    "email", "ui", "import", "security", "backup", "audit",
+    "email", "ui", "import", "security", "backup", "audit", "accounting",
 ]
 
 CATEGORY_LABEL = {
@@ -40,6 +40,7 @@ CATEGORY_LABEL = {
     "notifications": "Notification rules",
     "telegram": "Telegram",
     "ai": "AI assistant",
+    "accounting": "Accounting",
 }
 
 
@@ -298,6 +299,14 @@ DEFAULTS: list[dict] = [
     {"key": "audit.log_read_actions", "category": "audit", "type": "bool",
      "label": "Log read actions", "value": False,
      "description": "Capture GET requests in the audit log too. Verbose; off by default."},
+
+    # ---------- Accounting ----------
+    {"key": "accounting.enabled", "category": "accounting", "type": "bool",
+     "label": "Enable double-entry accounting", "value": False,
+     "description": "When enabled, every sub-ledger transaction (rent invoice, receipt, "
+                    "landlord payment, expense) also writes a double-entry journal entry "
+                    "to the general ledger. Switch on only after running the opening-balance "
+                    "backfill script. Property management works normally regardless of this flag."},
 ]
 
 

@@ -18,6 +18,8 @@ import {
   CheckSquare,
   Layers,
   FileText,
+  Wrench,
+  RefreshCcw,
 } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: typeof LayoutDashboard; perm?: string };
@@ -51,6 +53,13 @@ export const navGroups: NavGroup[] = [
       { href: "/contracts/landlord", label: "Landlord Contracts", icon: FileKey2, perm: "property.view" },
       { href: "/contracts", label: "Client Contracts", icon: FileSignature, perm: "contract.view" },
       { href: "/agreements", label: "Agreements", icon: FileText, perm: "agreement.view" },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [
+      { href: "/renewals", label: "Renewals", icon: RefreshCcw, perm: "property.view" },
+      { href: "/maintenance", label: "Maintenance", icon: Wrench, perm: "property.view" },
     ],
   },
   {
