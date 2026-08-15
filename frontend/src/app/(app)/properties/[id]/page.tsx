@@ -8,8 +8,13 @@ import Link from "next/link";
 import {
   ArrowLeft, Building2, Paperclip, FileText, Layers, DoorOpen,
   Calendar, AlertTriangle, Plus, Pencil, Trash2, Hash,
-  SlidersHorizontal, Banknote,
+  SlidersHorizontal, Banknote, Search, LayoutDashboard, BarChart3,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell as PieCell, Legend,
+} from "recharts";
 import { api } from "@/lib/api";
 import { keys } from "@/lib/query-keys";
 import { Can } from "@/components/can";
@@ -59,9 +64,9 @@ type Agreement = {
 
 type Landlord = { id: number; code: string; name: string };
 
-type TabKey = "overview" | "money" | "agreement" | "floors" | "units" | "attachments";
+type TabKey = "overview" | "money" | "agreement" | "floors" | "units" | "attachments" | "dashboard" | "reports";
 
-const VALID_TABS: TabKey[] = ["overview", "money", "agreement", "floors", "units", "attachments"];
+const VALID_TABS: TabKey[] = ["overview", "money", "agreement", "floors", "units", "attachments", "dashboard", "reports"];
 
 export default function PropertyDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = useRouteParams(params);
@@ -93,6 +98,8 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
     { key: "floors", label: "Floors", icon: Layers },
     { key: "units", label: "Units", icon: DoorOpen },
     { key: "attachments", label: "Attachments", icon: Paperclip },
+    { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { key: "reports", label: "Reports", icon: BarChart3 },
   ];
 
   return (
@@ -175,6 +182,8 @@ export default function PropertyDetail({ params }: { params: Promise<{ id: strin
       {tab === "floors" && <FloorsTab propertyId={property.id} />}
       {tab === "units" && <UnitsTab propertyId={property.id} />}
       {tab === "attachments" && <AttachmentsTab entityType="property" entityId={property.id} />}
+      {tab === "dashboard" && <PropertyDashboardTab propertyId={property.id} property={property} />}
+      {tab === "reports" && <PropertyReportsTab propertyId={property.id} property={property} />}
     </div>
   );
 }
@@ -558,12 +567,16 @@ const UNIT_STATUS_TONE: Record<string, string> = {
   blocked: "bg-rose-500/10 text-rose-600",
 };
 
+const FLOORS_PAGE_SIZE = 15;
+
 function FloorsTab({ propertyId }: { propertyId: number }) {
   const [rows, setRows] = useState<Floor[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Floor | null>(null);
   const [renumber, setRenumber] = useState<Floor | null>(null);
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(0);
 
   const load = async () => {
     setLoading(true);
@@ -576,6 +589,20 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
   };
 
   useEffect(() => { load(); }, [propertyId]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setPage(0); }, [q]);
+
+  const filtered = useMemo(() => {
+    const lq = q.toLowerCase();
+    return lq
+      ? rows.filter((f) =>
+          f.floor_number.toLowerCase().includes(lq) ||
+          (f.floor_name ?? "").toLowerCase().includes(lq) ||
+          (f.floor_type ?? "").toLowerCase().includes(lq))
+      : rows;
+  }, [rows, q]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / FLOORS_PAGE_SIZE));
+  const paged = filtered.slice(page * FLOORS_PAGE_SIZE, (page + 1) * FLOORS_PAGE_SIZE);
 
   const remove = async (f: Floor) => {
     if (!confirm(`Delete floor ${f.floor_number}?`)) return;
@@ -590,8 +617,16 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-muted-foreground">Floors registered under this property.</div>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search floors…"
+            className="h-9 pl-8 pr-3 w-52 rounded-md border border-input bg-card/60 text-sm"
+          />
+        </div>
         <Can perm="floor.manage">
           <button onClick={() => { setEditing(null); setShowForm(true); }}
             className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">
@@ -614,8 +649,8 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
           </thead>
           <tbody>
             {loading ? <tr><td colSpan={6} className="py-10 text-center text-muted-foreground">Loading…</td></tr>
-            : rows.length === 0 ? <tr><td colSpan={6} className="py-10 text-center text-muted-foreground">No floors yet</td></tr>
-            : rows.map((f) => (
+            : paged.length === 0 ? <tr><td colSpan={6} className="py-10 text-center text-muted-foreground">{q ? "No floors match your search." : "No floors yet"}</td></tr>
+            : paged.map((f) => (
               <tr key={f.id} className="border-b border-border/60 hover:bg-accent/30">
                 <td className="py-2 px-3 font-mono">{f.floor_number}</td>
                 <td className="py-2 px-3">{f.floor_name ?? "—"}</td>
@@ -626,34 +661,52 @@ function FloorsTab({ propertyId }: { propertyId: number }) {
                     {f.status}
                   </span>
                 </td>
-                <td className="py-2 px-3 text-right">
-                  <Can perm="unit.manage">
-                    <button onClick={() => setRenumber(f)}
-                      disabled={f.unit_count === 0}
-                      title={f.unit_count === 0 ? "No units to renumber" : "Renumber all units on this floor"}
-                      aria-label={`Renumber units on floor ${f.floor_number}`}
-                      className="h-8 w-8 grid place-items-center rounded-md hover:bg-accent inline-block disabled:opacity-40 disabled:cursor-not-allowed">
-                      <Hash className="h-3.5 w-3.5" />
-                    </button>
-                  </Can>
-                  <Can perm="floor.manage">
-                    <button onClick={() => { setEditing(f); setShowForm(true); }}
-                      aria-label={`Edit floor ${f.floor_number}`}
-                      className="h-8 w-8 grid place-items-center rounded-md hover:bg-accent inline-block">
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button onClick={() => remove(f)}
-                      aria-label={`Delete floor ${f.floor_number}`}
-                      className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive inline-block">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </Can>
+                <td className="py-2 px-3">
+                  <div className="flex items-center justify-end gap-0.5">
+                    <Can perm="unit.manage">
+                      <button onClick={() => setRenumber(f)}
+                        disabled={f.unit_count === 0}
+                        title={f.unit_count === 0 ? "No units to renumber" : "Renumber all units on this floor"}
+                        aria-label={`Renumber units on floor ${f.floor_number}`}
+                        className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed">
+                        <Hash className="h-3.5 w-3.5" />
+                      </button>
+                    </Can>
+                    <Can perm="floor.manage">
+                      <button onClick={() => { setEditing(f); setShowForm(true); }}
+                        aria-label={`Edit floor ${f.floor_number}`}
+                        className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-accent">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => remove(f)}
+                        aria-label={`Delete floor ${f.floor_number}`}
+                        className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-destructive/10 text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </Can>
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {filtered.length > FLOORS_PAGE_SIZE && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{filtered.length} floor{filtered.length !== 1 ? "s" : ""} · page {page + 1} of {pageCount}</span>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-border hover:bg-accent disabled:opacity-40">
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={page >= pageCount - 1}
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-border hover:bg-accent disabled:opacity-40">
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <FloorDialog open={showForm} propertyId={propertyId} editing={editing}
         onClose={() => setShowForm(false)}
@@ -1354,4 +1407,259 @@ function statusBadgeClass(s: string): string {
   if (s === "on_hold") return "bg-amber-500/10 text-amber-600";
   if (s === "maintenance") return "bg-sky-500/10 text-sky-600";
   return "bg-muted text-muted-foreground";
+}
+
+const PIE_COLORS: Record<string, string> = {
+  occupied: "#10b981",
+  empty: "#94a3b8",
+  maintenance: "#f59e0b",
+  blocked: "#ef4444",
+};
+
+function PropertyDashboardTab({ propertyId, property }: { propertyId: number; property: Property }) {
+  const [units, setUnits] = useState<Unit[] | null>(null);
+  const [floors, setFloors] = useState<Floor[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([
+      api.get(`/properties/${propertyId}/units`),
+      api.get(`/properties/${propertyId}/floors`),
+    ]).then(([u, f]) => {
+      if (!cancelled) { setUnits(u.data.data); setFloors(f.data.data); }
+    }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [propertyId]);
+
+  if (loading) return <div className="glass rounded-xl p-10 text-center text-muted-foreground animate-pulse">Loading dashboard…</div>;
+  if (!units) return <div className="glass rounded-xl p-10 text-center text-muted-foreground">No unit data available.</div>;
+
+  const statusCounts = ["occupied", "empty", "maintenance", "blocked"].map((s) => ({
+    name: s.charAt(0).toUpperCase() + s.slice(1),
+    value: units.filter((u) => u.occupancy_status === s).length,
+  })).filter((d) => d.value > 0);
+
+  const floorData = floors.map((f) => ({
+    name: f.floor_number,
+    Units: units.filter((u) => u.floor_id === f.id).length,
+    Occupied: units.filter((u) => u.floor_id === f.id && u.occupancy_status === "occupied").length,
+  }));
+
+  const occupied = units.filter((u) => u.occupancy_status === "occupied").length;
+  const pct = units.length ? Math.round((occupied * 100) / units.length) : 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {(["occupied", "empty", "maintenance", "blocked"] as const).map((s) => {
+          const cnt = units.filter((u) => u.occupancy_status === s).length;
+          const tone = s === "occupied" ? "text-emerald-600" : s === "empty" ? "" : s === "maintenance" ? "text-amber-600" : "text-rose-600";
+          return (
+            <div key={s} className="glass rounded-xl p-4">
+              <div className="text-xs text-muted-foreground capitalize">{s}</div>
+              <div className={"text-2xl font-semibold mt-1 " + tone}>{cnt}</div>
+              <div className="text-xs text-muted-foreground">{units.length ? Math.round((cnt * 100) / units.length) : 0}% of total</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="glass rounded-xl p-4">
+          <div className="text-sm font-semibold mb-4">Occupancy breakdown — {pct}% occupied</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <PieChart>
+              <Pie data={statusCounts} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, value }) => `${name} ${value}`}>
+                {statusCounts.map((entry) => (
+                  <PieCell key={entry.name} fill={PIE_COLORS[entry.name.toLowerCase()] ?? "#94a3b8"} />
+                ))}
+              </Pie>
+              <Legend />
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="glass rounded-xl p-4">
+          <div className="text-sm font-semibold mb-4">Units per floor</div>
+          {floorData.length === 0 ? (
+            <div className="text-sm text-muted-foreground py-8 text-center">No floor data.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={floorData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="Units" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Occupied" fill="#10b981" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4">
+        <div className="text-sm font-semibold mb-3">Unit type distribution</div>
+        {Object.keys(property.units_by_type ?? {}).length === 0 ? (
+          <div className="text-sm text-muted-foreground">No units registered yet.</div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(property.units_by_type ?? {})
+              .sort(([, a], [, b]) => b - a)
+              .map(([code, count]) => (
+                <div key={code} className="glass rounded-lg px-3 py-2 text-center min-w-[80px]">
+                  <div className="text-lg font-semibold">{count}</div>
+                  <div className="text-xs text-muted-foreground capitalize">{code.replaceAll("_", " ")}</div>
+                </div>
+              ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PropertyReportsTab({ propertyId, property }: { propertyId: number; property: Property }) {
+  const [units, setUnits] = useState<Unit[] | null>(null);
+  const [floors, setFloors] = useState<Floor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 20;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([
+      api.get(`/properties/${propertyId}/units`),
+      api.get(`/properties/${propertyId}/floors`),
+    ]).then(([u, f]) => {
+      if (!cancelled) { setUnits(u.data.data); setFloors(f.data.data); }
+    }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [propertyId]);
+
+  useEffect(() => { setPage(0); }, [q, statusFilter]);
+
+  const floorName = (id: number) => floors.find((f) => f.id === id)?.floor_number ?? "—";
+
+  const filtered = useMemo(() => {
+    if (!units) return [];
+    let r = units;
+    if (statusFilter) r = r.filter((u) => u.occupancy_status === statusFilter);
+    if (q) {
+      const lq = q.toLowerCase();
+      r = r.filter((u) =>
+        u.unit_number.toLowerCase().includes(lq) ||
+        (u.unit_name ?? "").toLowerCase().includes(lq) ||
+        u.unit_type.toLowerCase().includes(lq));
+    }
+    return r;
+  }, [units, q, statusFilter]);
+
+  const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  if (loading) return <div className="glass rounded-xl p-10 text-center text-muted-foreground animate-pulse">Loading report…</div>;
+
+  const totalRent = (units ?? []).filter((u) => u.monthly_rent != null).reduce((s, u) => s + (u.monthly_rent ?? 0), 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="glass rounded-xl p-4">
+          <div className="text-xs text-muted-foreground">Total units</div>
+          <div className="text-2xl font-semibold mt-1">{(units ?? []).length}</div>
+        </div>
+        <div className="glass rounded-xl p-4">
+          <div className="text-xs text-muted-foreground">Occupied</div>
+          <div className="text-2xl font-semibold mt-1 text-emerald-600">{(units ?? []).filter((u) => u.occupancy_status === "occupied").length}</div>
+        </div>
+        <div className="glass rounded-xl p-4">
+          <div className="text-xs text-muted-foreground">Empty</div>
+          <div className="text-2xl font-semibold mt-1">{(units ?? []).filter((u) => u.occupancy_status === "empty").length}</div>
+        </div>
+        <div className="glass rounded-xl p-4">
+          <div className="text-xs text-muted-foreground">Monthly rent (set)</div>
+          <div className="text-2xl font-semibold mt-1">{totalRent.toLocaleString()}</div>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-sm font-semibold">
+            {property.name} — Unit register
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search units…"
+                className="h-8 pl-8 pr-3 w-44 rounded-md border border-input bg-card/60 text-sm" />
+            </div>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+              className="h-8 rounded-md border border-input bg-card/60 px-2 text-sm">
+              <option value="">All statuses</option>
+              <option value="occupied">Occupied</option>
+              <option value="empty">Empty</option>
+              <option value="maintenance">Maintenance</option>
+              <option value="blocked">Blocked</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs text-muted-foreground border-b border-border">
+              <tr>
+                <th className="py-2 pr-3">Unit #</th>
+                <th className="py-2 pr-3">Floor</th>
+                <th className="py-2 pr-3">Type</th>
+                <th className="py-2 pr-3">Size</th>
+                <th className="py-2 pr-3 text-right">Rent</th>
+                <th className="py-2 pr-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paged.length === 0 ? (
+                <tr><td colSpan={6} className="py-8 text-center text-muted-foreground">No units match.</td></tr>
+              ) : paged.map((u) => (
+                <tr key={u.id} className="border-b border-border/60 hover:bg-accent/30">
+                  <td className="py-1.5 pr-3 font-mono text-xs">{u.unit_number}{u.unit_name ? ` · ${u.unit_name}` : ""}</td>
+                  <td className="py-1.5 pr-3 text-xs">{floorName(u.floor_id)}</td>
+                  <td className="py-1.5 pr-3 text-xs capitalize">{u.unit_type.replaceAll("_", " ")}</td>
+                  <td className="py-1.5 pr-3 text-xs">{u.size ?? "—"}</td>
+                  <td className="py-1.5 pr-3 text-xs text-right">{u.monthly_rent != null ? u.monthly_rent.toLocaleString() : "—"}</td>
+                  <td className="py-1.5 pr-3">
+                    <span className={"rounded-full px-2 py-0.5 text-xs " + (UNIT_STATUS_TONE[u.occupancy_status] ?? "bg-muted text-muted-foreground")}>
+                      {u.occupancy_status.replace("_", " ")}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {filtered.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between text-xs text-muted-foreground pt-2">
+            <span>{filtered.length} units · page {page + 1} of {pageCount}</span>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}
+                className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-border hover:bg-accent disabled:opacity-40">
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={page >= pageCount - 1}
+                className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-border hover:bg-accent disabled:opacity-40">
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

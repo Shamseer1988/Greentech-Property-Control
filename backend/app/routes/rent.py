@@ -5,6 +5,7 @@ from flask import Blueprint, request
 
 from ..extensions import db
 from ..models import Client, ClientContract, Receipt, RentCharge
+from ..models.landlord_rent import LandlordCharge
 from ..services import (
     ageing as ageing_service, approvals as approval_service, audit,
     receipts as receipt_service, rent as rent_service,
@@ -77,6 +78,120 @@ def list_charges():
         meta={"count": len(rows),
               "total_due": round(sum(r.outstanding() for r in rows), 2)},
     )
+
+
+@rent_bp.patch("/charges/<int:charge_id>")
+@require_permission("rent.generate")
+def amend_charge(charge_id: int):
+    charge = RentCharge.query.get_or_404(charge_id)
+    payload = request.get_json(silent=True) or {}
+    actor = current_user()
+
+    old = {"amount": float(charge.amount), "is_free_month": charge.is_free_month,
+           "remarks": charge.remarks}
+
+    is_free = payload.get("is_free_month")
+    if is_free is True:
+        charge.amount = 0
+        charge.is_free_month = True
+    elif "new_amount" in payload:
+        try:
+            new_amount = float(payload["new_amount"])
+        except (TypeError, ValueError):
+            return error_response("new_amount must be a number", 400)
+        if new_amount < 0:
+            return error_response("new_amount cannot be negative", 400)
+        allocated = float(charge.allocated or 0)
+        if new_amount < allocated:
+            return error_response(
+                f"Cannot reduce to {new_amount:.2f} — "
+                f"{allocated:.2f} already allocated", 400)
+        charge.amount = new_amount
+        charge.is_free_month = new_amount == 0
+
+    remarks = (payload.get("remarks") or "").strip()
+    if remarks:
+        charge.remarks = remarks
+
+    charge.recompute_status()
+    audit.record(user=actor, action="amend", module="rent",
+                 entity_type="rent_charge", entity_id=charge.id,
+                 old_value=old,
+                 new_value={"amount": float(charge.amount),
+                            "is_free_month": charge.is_free_month,
+                            "remarks": charge.remarks})
+    db.session.commit()
+    return success_response(data=charge.to_dict(), message="Rent charge amended")
+
+
+@rent_bp.get("/landlord-charges")
+@require_permission("rent.view")
+def list_landlord_charges():
+    query = LandlordCharge.query
+    landlord_id = request.args.get("landlord_id", type=int)
+    property_id = request.args.get("property_id", type=int)
+    contract_id = request.args.get("contract_id", type=int)
+    status = request.args.get("status")
+
+    if landlord_id:
+        query = query.filter_by(landlord_id=landlord_id)
+    if property_id:
+        query = query.filter_by(property_id=property_id)
+    if contract_id:
+        query = query.filter_by(contract_id=contract_id)
+    if status:
+        query = query.filter_by(status=status)
+
+    rows = query.order_by(LandlordCharge.period_month.desc(),
+                          LandlordCharge.id.desc()).limit(1000).all()
+    return success_response(
+        data=[r.to_dict() for r in rows],
+        meta={"count": len(rows)},
+    )
+
+
+@rent_bp.patch("/landlord-charges/<int:charge_id>")
+@require_permission("property.amend")
+def amend_landlord_charge(charge_id: int):
+    charge = LandlordCharge.query.get_or_404(charge_id)
+    payload = request.get_json(silent=True) or {}
+    actor = current_user()
+
+    old = {"amount": float(charge.amount), "is_free_month": charge.is_free_month,
+           "remarks": charge.remarks}
+
+    is_free = payload.get("is_free_month")
+    if is_free is True:
+        charge.amount = 0
+        charge.is_free_month = True
+    elif "new_amount" in payload:
+        try:
+            new_amount = float(payload["new_amount"])
+        except (TypeError, ValueError):
+            return error_response("new_amount must be a number", 400)
+        if new_amount < 0:
+            return error_response("new_amount cannot be negative", 400)
+        allocated = float(charge.allocated or 0)
+        if new_amount < allocated:
+            return error_response(
+                f"Cannot reduce to {new_amount:.2f} — "
+                f"{allocated:.2f} already allocated", 400)
+        charge.amount = new_amount
+        charge.is_free_month = new_amount == 0
+
+    remarks = (payload.get("remarks") or "").strip()
+    if remarks:
+        charge.remarks = remarks
+
+    charge.recompute_status()
+    audit.record(user=actor, action="amend", module="landlord_rent",
+                 entity_type="landlord_charge", entity_id=charge.id,
+                 old_value=old,
+                 new_value={"amount": float(charge.amount),
+                            "is_free_month": charge.is_free_month,
+                            "remarks": charge.remarks})
+    db.session.commit()
+    return success_response(data=charge.to_dict(), message="Landlord charge amended")
 
 
 @rent_bp.get("/bulk-preview")

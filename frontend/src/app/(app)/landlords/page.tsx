@@ -134,16 +134,16 @@ export default function LandlordsPage() {
       ),
     },
     {
-      id: "actions", header: "", enableSorting: false,
+      id: "actions", header: "Actions", enableSorting: false,
       cell: (c) => {
         const r = c.row.original;
         return (
-          <div className="text-right">
+          <div className="flex items-center justify-end gap-0.5">
             <Can perm="landlord.edit">
               <button
                 onClick={() => { setEditing(r); setShowForm(true); }}
                 aria-label={`Edit ${r.name}`}
-                className="h-8 w-8 grid place-items-center rounded-md hover:bg-accent">
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-accent">
                 <Pencil className="h-3.5 w-3.5" />
               </button>
             </Can>
