@@ -515,6 +515,24 @@ def _restore_database(source: Path) -> None:
         check=False,
     )
 
+    # 2b. Drop every FK constraint so that --clean can later drop primary
+    #     keys without hitting "cannot drop constraint X because other
+    #     objects depend on it". pg_restore recreates all constraints
+    #     after restoring the data, so nothing is permanently lost.
+    _psql_on_target(
+        "DO $$ DECLARE r RECORD; BEGIN "
+        "FOR r IN "
+        "  SELECT table_schema, table_name, constraint_name "
+        "  FROM information_schema.table_constraints "
+        "  WHERE constraint_type = 'FOREIGN KEY' AND table_schema = 'public' "
+        "LOOP "
+        "  EXECUTE format('ALTER TABLE IF EXISTS %I.%I DROP CONSTRAINT IF EXISTS %I', "
+        "    r.table_schema, r.table_name, r.constraint_name); "
+        "END LOOP; END $$;",
+        timeout=60,
+        check=False,
+    )
+
     # 3. Restore in place. --clean --if-exists drops each object it is
     #    about to recreate; --single-transaction makes the whole thing
     #    atomic, so a failure rolls back to the pre-restore state rather
