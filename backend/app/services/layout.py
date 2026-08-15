@@ -242,7 +242,10 @@ def generate_compound_structure(
                     f"1 and {MAX_UNITS_PER_FLOOR}")
 
             floor_specs = _floor_specs(floors, "", ground_floor)
-            for stored_floor_no, floor_seq in floor_specs:
+            total_units = floors * units_per_floor
+            unit_pad = max(2, len(str(total_units)))
+            unit_counter = 1
+            for stored_floor_no, _floor_seq in floor_specs:
                 floor = Floor(
                     property_id=property.id,
                     floor_number=f"{code}-{stored_floor_no}",
@@ -256,11 +259,10 @@ def generate_compound_structure(
                              entity_type="floor", entity_id=floor.id,
                              new_value=floor.to_dict())
 
-                unit_pad = max(2, len(str(units_per_floor)))
-                for uidx in range(1, units_per_floor + 1):
+                for _ in range(units_per_floor):
                     unit = Unit(
                         property_id=property.id, floor_id=floor.id,
-                        unit_number=f"{code}-{floor_seq}{uidx:0{unit_pad}d}",
+                        unit_number=f"{code}-{unit_counter:0{unit_pad}d}",
                         unit_type=unit_type,
                         created_by=actor.id, updated_by=actor.id,
                     )
@@ -268,6 +270,7 @@ def generate_compound_structure(
                     db.session.flush()
                     counts["units"] += 1
                     rooms_built += 1
+                    unit_counter += 1
                     audit.record(user=actor, action="create", module="unit",
                                  entity_type="unit", entity_id=unit.id,
                                  new_value=unit.to_dict())
