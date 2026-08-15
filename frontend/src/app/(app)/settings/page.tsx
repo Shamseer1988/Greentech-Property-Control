@@ -79,6 +79,17 @@ export default function SettingsPage() {
 
   useEffect(() => { load(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  const anyDirty = Object.values(drafts).some((d) => Object.keys(d).length > 0);
+  useEffect(() => {
+    if (!anyDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [anyDirty]);
+
   const active = useMemo(
     () => sections.find((s) => s.category === activeTab) ?? null,
     [sections, activeTab],

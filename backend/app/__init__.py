@@ -184,6 +184,10 @@ def register_error_handlers(app: Flask) -> None:
         # `err.description`. Surface it so clients can show "try again in N".
         return error_response("Too many requests", 429, str(getattr(err, "description", "")))
 
+    @app.errorhandler(422)
+    def unprocessable(err):
+        return error_response("Request validation failed", 422, str(getattr(err, "description", "")))
+
     @app.errorhandler(500)
     def server_error(err):
         return error_response("Internal server error", 500)
