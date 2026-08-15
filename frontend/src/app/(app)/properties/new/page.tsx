@@ -417,7 +417,7 @@ export default function NewPropertyPage() {
                                 <span className="h-6 w-6 shrink-0 rounded-md bg-primary/10 text-primary text-xs font-semibold grid place-items-center">
                                   {b.resolvedCode}
                                 </span>
-                                <input className={inputClass + " h-8"} value={buildings[i].label}
+                                <input className={inputClass + " h-8 min-w-0 flex-1"} value={buildings[i].label}
                                   placeholder={`Building ${b.resolvedCode}`}
                                   onChange={(e) => setB(b.key, "label", e.target.value)} />
                                 <input className={inputClass + " h-8 w-20 shrink-0"} value={buildings[i].code}
