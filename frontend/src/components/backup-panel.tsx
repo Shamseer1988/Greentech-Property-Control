@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Can } from "@/components/can";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast, errorMessage } from "@/components/ui/toast";
 
 type BackupFile = {
@@ -41,6 +42,7 @@ export function BackupPanel() {
   const [busy, setBusy] = useState<string | null>(null); // which action is running
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
 
   const load = async () => {
     setLoading(true);
@@ -122,6 +124,7 @@ export function BackupPanel() {
       );
       toast.success("Restore complete", r.data?.message ?? filename);
       setConfirmRestore(null);
+      queryClient.clear();
       await load();
     } catch (err: unknown) {
       toast.error("Restore failed", errorMessage(err));
@@ -158,6 +161,7 @@ export function BackupPanel() {
         timeout: 600_000,
       });
       toast.success("Restore complete", r.data?.message ?? file.name);
+      queryClient.clear();
       await load();
     } catch (err: unknown) {
       toast.error("Restore failed", errorMessage(err));

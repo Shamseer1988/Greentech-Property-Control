@@ -175,7 +175,7 @@ function saveFilters(slug: string, filters: Record<string, string>) {
 export default function ReportPage(props: { params: Promise<{ slug: string }> }) {
   return (
     <ErrorBoundary fallbackTitle="The report viewer crashed.">
-      <ReportPageInner {...props} />
+      <ReportPageInner params={props.params} />
     </ErrorBoundary>
   );
 }

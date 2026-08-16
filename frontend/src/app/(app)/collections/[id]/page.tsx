@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { ArrowLeft, Printer, Banknote, XCircle } from "lucide-react";
@@ -44,7 +44,8 @@ type Receipt = {
 };
 
 /** The Soa sheet, reborn: charges and receipts with a running balance. */
-export default function StatementPage({ params }: { params: Promise<{ id: string }> }) {
+export default function StatementPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { id } = useRouteParams(params);
   const qc = useQueryClient();
   const [showReceipt, setShowReceipt] = useState(false);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, use } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouteParams } from "@/lib/use-route-params";
@@ -65,7 +65,8 @@ function currentMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-export default function LandlordDashboard({ params }: { params: Promise<{ id: string }> }) {
+export default function LandlordDashboard(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { id } = useRouteParams(params);
   const qc = useQueryClient();
   const [month, setMonth] = useState(currentMonth());

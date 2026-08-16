@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, use } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouteParams } from "@/lib/use-route-params";
@@ -57,7 +57,8 @@ const TABS: { key: TabKey; label: string; icon: typeof FileText }[] = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
 ];
 
-export default function ClientDashboard({ params }: { params: Promise<{ id: string }> }) {
+export default function ClientDashboard(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { id } = useRouteParams(params);
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("overview");

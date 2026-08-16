@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, use } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { ArrowLeft, Printer, Layers, DoorClosed, ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
@@ -131,7 +131,8 @@ function StatCard({
   );
 }
 
-export default function FloorPlanPage({ params }: { params: Promise<{ id: string }> }) {
+export default function FloorPlanPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { id } = useRouteParams(params);
   const qc = useQueryClient();
   const { types: unitTypes } = useUnitTypes();

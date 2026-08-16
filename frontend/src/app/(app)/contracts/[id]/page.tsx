@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouteParams } from "@/lib/use-route-params";
@@ -20,7 +20,8 @@ import { AMENDMENT_LABEL, MODE_LABEL, STATUS_TONE, money } from "@/lib/contract-
 
 type TabKey = "overview" | "units" | "cheques" | "amendments" | "attachments";
 
-export default function ContractDetail({ params }: { params: Promise<{ id: string }> }) {
+export default function ContractDetail(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { id } = useRouteParams(params);
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>("overview");

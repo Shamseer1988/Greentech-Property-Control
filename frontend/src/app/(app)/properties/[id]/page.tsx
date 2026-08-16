@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, use } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouteParams } from "@/lib/use-route-params";
 import { useSearchParams } from "next/navigation";
@@ -68,7 +68,8 @@ type TabKey = "overview" | "money" | "agreement" | "floors" | "units" | "attachm
 
 const VALID_TABS: TabKey[] = ["overview", "money", "agreement", "floors", "units", "attachments", "dashboard", "reports"];
 
-export default function PropertyDetail({ params }: { params: Promise<{ id: string }> }) {
+export default function PropertyDetail(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { id } = useRouteParams(params);
   const searchParams = useSearchParams();
   const initialTab = (() => {

@@ -413,14 +413,14 @@ export default function NewPropertyPage() {
                           const bulkMode = bulkModeFor(b.unit_type);
                           return (
                             <div key={b.key} className="rounded-lg border border-border bg-background/40 p-3 space-y-3">
-                              <div className="flex min-w-0 items-center gap-2">
+                              <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                                 <span className="h-6 w-6 shrink-0 rounded-md bg-primary/10 text-primary text-xs font-semibold grid place-items-center">
                                   {b.resolvedCode}
                                 </span>
-                                <input className={inputClass + " h-8 min-w-0 flex-1"} value={buildings[i].label}
+                                <input className={inputClass.replace("w-full", "") + " h-8 min-w-0 flex-1"} value={buildings[i].label}
                                   placeholder={`Building ${b.resolvedCode}`}
                                   onChange={(e) => setB(b.key, "label", e.target.value)} />
-                                <input className={inputClass + " h-8 shrink-0"} style={{width: "5rem"}} value={buildings[i].code}
+                                <input className={inputClass.replace("w-full", "") + " h-8 shrink-0 w-20"} value={buildings[i].code}
                                   placeholder="code" maxLength={4}
                                   onChange={(e) => setB(b.key, "code", e.target.value)} />
                                 <button type="button" onClick={() => removeBuilding(b.key)}

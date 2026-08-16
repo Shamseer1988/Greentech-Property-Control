@@ -20,6 +20,26 @@ const nextConfig = {
       },
     ];
   },
+  async headers() {
+    return [
+      {
+        // Force Cloudflare and browsers to NEVER cache API responses.
+        // We do this in the backend too, but applying it at the edge guarantees
+        // Cloudflare sees it before any internal Next.js proxying obscures it.
+        source: "/api/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "no-store, no-cache, must-revalidate, max-age=0",
+          },
+          {
+            key: "Pragma",
+            value: "no-cache",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
